@@ -1,0 +1,23 @@
+permissions:
+  allow_all_roots: false
+  readable_roots:
+    - E:/.Programs
+  writable_roots:
+    - E:/.Programs/py/RepoPilot/outputs
+  deny_patterns:
+    - "**/.env"
+    - "**/.env.*"
+    - "**/.git/**"
+    - "**/.venv/**"
+    - "**/node_modules/**"
+    - "**/__pycache__/**"
+
+execution:
+  allow_command_execution: false
+  allowed_commands: []
+
+limits:
+  max_file_chars: 20000
+  max_search_results: 50
+  max_tree_entries: 300
+  max_tool_rounds: 8
