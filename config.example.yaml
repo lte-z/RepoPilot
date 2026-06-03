@@ -1,16 +1,24 @@
 permissions:
   allow_all_roots: false
   readable_roots:
-    - E:/.Programs
+    - .
   writable_roots:
-    - E:/.Programs/py/RepoPilot/outputs
+    - ./outputs
   deny_patterns:
     - "**/.env"
     - "**/.env.*"
     - "**/.git/**"
     - "**/.venv/**"
+    - "**/.pytest_cache"
+    - "**/.pytest_cache/**"
+    - "**/.ruff_cache"
+    - "**/.ruff_cache/**"
+    - "**/.mypy_cache"
+    - "**/.mypy_cache/**"
     - "**/node_modules/**"
     - "**/__pycache__/**"
+    - "**/*.egg-info"
+    - "**/*.egg-info/**"
 
 execution:
   allow_command_execution: false
