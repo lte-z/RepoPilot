@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from mcp.server.fastmcp import FastMCP
 
+from repopilot.tools.network import FetchUrlInput, web_fetch_url
 from repopilot.tools.repository import (
     DetectStackInput,
     GitSummaryInput,
@@ -125,6 +126,21 @@ async def mcp_repo_save_report(
 
     params = SaveReportInput(filename=filename, content=content, response_format=response_format)
     return repo_save_report(params)
+
+
+@mcp.tool(
+    name="web_fetch_url",
+    annotations={"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": True},
+)
+async def mcp_web_fetch_url(
+    url: str,
+    max_chars: int | None = None,
+    response_format: ResponseFormat = "markdown",
+) -> str:
+    """Fetch bounded public HTTP(S) text content for external context."""
+
+    params = FetchUrlInput(url=url, max_chars=max_chars, response_format=response_format)
+    return web_fetch_url(params)
 
 
 def main() -> None:

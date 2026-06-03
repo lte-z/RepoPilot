@@ -1,5 +1,6 @@
 permissions:
   allow_all_roots: false
+  respect_git_ignore: true
   readable_roots:
     - .
   writable_roots:
@@ -9,23 +10,42 @@ permissions:
     - "**/.env.*"
     - "**/.git/**"
     - "**/.venv/**"
-    - "**/.pytest_cache"
-    - "**/.pytest_cache/**"
-    - "**/.ruff_cache"
-    - "**/.ruff_cache/**"
-    - "**/.mypy_cache"
+  fallback_ignore_patterns:
+    - "**/.next/**"
+    - "**/.nuxt/**"
+    - "**/.parcel-cache/**"
+    - "**/.svelte-kit/**"
+    - "**/.turbo/**"
+    - "**/.vs/**"
+    - "**/build/**"
+    - "**/coverage/**"
+    - "**/debug/**"
+    - "**/dist/**"
+    - "**/*.egg-info/**"
     - "**/.mypy_cache/**"
     - "**/node_modules/**"
+    - "**/out/**"
+    - "**/.pytest_cache/**"
+    - "**/.ruff_cache/**"
+    - "**/release/**"
+    - "**/target/**"
     - "**/__pycache__/**"
-    - "**/*.egg-info"
-    - "**/*.egg-info/**"
 
 execution:
   allow_command_execution: false
   allowed_commands: []
+
+network:
+  allow_http_fetch: true
+  allowed_domains: []
+  deny_private_hosts: true
+  timeout_seconds: 15
+  max_fetch_chars: 20000
 
 limits:
   max_file_chars: 20000
   max_search_results: 50
   max_tree_entries: 300
   max_tool_rounds: 8
+  llm_timeout_seconds: 120
+  tool_timeout_seconds: 60

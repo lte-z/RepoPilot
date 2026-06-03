@@ -48,3 +48,26 @@ permissions:
         assert "需要提供任务文本" in str(exc)
     else:
         raise AssertionError("task-brief should require task text")
+
+
+def test_offline_analysis_reports_progress(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "README.md").write_text("hello", encoding="utf-8")
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        f"""
+permissions:
+  readable_roots:
+    - {tmp_path.as_posix()}
+  writable_roots:
+    - {(tmp_path / "outputs").as_posix()}
+  deny_patterns: []
+""",
+        encoding="utf-8",
+    )
+    events: list[str] = []
+
+    run_analysis("overview", str(repo), config_path=config_path, offline=True, progress=events.append)
+
+    assert any("离线模式" in event for event in events)

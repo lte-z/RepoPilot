@@ -1,4 +1,5 @@
 import json
+import subprocess
 from pathlib import Path
 
 from repopilot.config import AppConfig, LimitSettings, PermissionSettings
@@ -116,6 +117,65 @@ def test_tree_hides_generated_metadata(tmp_path: Path) -> None:
     assert "README.md" in tree
     assert ".pytest_cache" not in tree
     assert "sample.egg-info" not in tree
+
+
+def test_tree_and_stack_skip_common_generated_directories(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "CMakeLists.txt").write_text("cmake_minimum_required(VERSION 3.20)", encoding="utf-8")
+    build = repo / "build"
+    build.mkdir()
+    (build / "generated.csproj").write_text("<Project />", encoding="utf-8")
+    (build / "CMakeCache.txt").write_text("cache", encoding="utf-8")
+    config = make_config(tmp_path, tmp_path / "outputs")
+
+    tree = repo_list_tree(ListTreeInput(repo_path=str(repo), max_depth=3), config)
+    stack = repo_detect_stack(DetectStackInput(repo_path=str(repo)), config)
+
+    assert "CMakeLists.txt" in tree
+    assert "build" not in tree
+    assert "C/C++" in stack
+    assert ".NET" not in stack
+
+
+def test_gitignore_controls_tree_read_search_and_stack(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init"], cwd=repo, stdin=subprocess.DEVNULL, check=True, capture_output=True)
+    (repo / ".gitignore").write_text("build/\n", encoding="utf-8")
+    (repo / "README.md").write_text("visible needle", encoding="utf-8")
+    build = repo / "build"
+    build.mkdir()
+    (build / "package.json").write_text('{"scripts":{"dev":"vite"},"needle":"hidden"}', encoding="utf-8")
+    config = make_config(tmp_path, tmp_path / "outputs")
+
+    tree = repo_list_tree(ListTreeInput(repo_path=str(repo), max_depth=3), config)
+    read = repo_read_file(ReadFileInput(repo_path=str(repo), path="build/package.json"), config)
+    search = repo_search_text(SearchTextInput(repo_path=str(repo), query="needle"), config)
+    stack = repo_detect_stack(DetectStackInput(repo_path=str(repo)), config)
+
+    assert "README.md" in tree
+    assert "build" not in tree
+    assert "Git ignore" in read
+    assert "README.md" in search
+    assert "build/package.json" not in search
+    assert "Node.js" not in stack
+
+
+def test_git_repo_does_not_apply_fallback_ignore_when_git_allows_path(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init"], cwd=repo, stdin=subprocess.DEVNULL, check=True, capture_output=True)
+    (repo / ".gitignore").write_text("# build artifacts are intentionally visible in this fixture\n", encoding="utf-8")
+    build = repo / "build"
+    build.mkdir()
+    (build / "keep.txt").write_text("visible", encoding="utf-8")
+    config = make_config(tmp_path, tmp_path / "outputs")
+
+    tree = repo_list_tree(ListTreeInput(repo_path=str(repo), max_depth=2), config)
+
+    assert "build/" in tree
+    assert "build/keep.txt" in tree
 
 
 def test_tree_and_search_skip_writable_outputs(tmp_path: Path) -> None:

@@ -75,28 +75,146 @@ def _is_probably_binary(path: Path) -> bool:
     return b"\x00" in sample
 
 
-def _iter_readable_files(guard: PathGuard):
+def _matches_any_pattern(rel: str, patterns: list[str]) -> bool:
+    normalized = rel.replace("\\", "/").lower()
+    candidates = [normalized, "/" + normalized]
+    for pattern in patterns:
+        item = pattern.replace("\\", "/").lower()
+        variants = [item]
+        if item.endswith("/**"):
+            variants.append(item[:-3])
+        for candidate in candidates:
+            if fnmatch(candidate, item) or any(fnmatch(candidate, variant) for variant in variants):
+                return True
+    return False
+
+
+def _matches_fallback_ignore(path: Path, guard: PathGuard) -> bool:
+    try:
+        rel = path.relative_to(guard.session_repo).as_posix()
+    except ValueError:
+        return False
+    return _matches_any_pattern(rel, guard.config.permissions.fallback_ignore_patterns)
+
+
+def _git(args: list[str], repo: Path, *, timeout: int = 20) -> tuple[int, str, str]:
+    completed = subprocess.run(
+        ["git", *args],
+        cwd=str(repo),
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=timeout,
+        check=False,
+    )
+    return completed.returncode, completed.stdout.strip(), completed.stderr.strip()
+
+
+def _is_git_repository(guard: PathGuard) -> bool:
+    try:
+        code, inside, _ = _git(["rev-parse", "--is-inside-work-tree"], guard.session_repo, timeout=5)
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return False
+    return code == 0 and inside == "true"
+
+
+def _git_visible_files(guard: PathGuard) -> list[Path]:
+    if not guard.config.permissions.respect_git_ignore or not _is_git_repository(guard):
+        return []
+    try:
+        code, stdout, _ = _git(["ls-files", "-co", "--exclude-standard", "-z"], guard.session_repo, timeout=20)
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return []
+    if code != 0 or not stdout:
+        return []
+
+    files: list[Path] = []
+    writable_rel_roots: list[str] = []
+    for root in guard.writable_roots:
+        try:
+            writable_rel_roots.append(root.relative_to(guard.session_repo).as_posix().lower())
+        except ValueError:
+            continue
+    for item in stdout.split("\0"):
+        if not item:
+            continue
+        rel = Path(item)
+        if rel.is_absolute() or ".." in rel.parts:
+            continue
+        rel_text = rel.as_posix()
+        if _matches_any_pattern(rel_text, guard.config.permissions.deny_patterns):
+            continue
+        if any(rel_text.lower() == root or rel_text.lower().startswith(root + "/") for root in writable_rel_roots):
+            continue
+        files.append(guard.session_repo / item)
+    return files
+
+
+def _is_ignored(path: Path, guard: PathGuard) -> bool:
+    try:
+        rel = path.relative_to(guard.session_repo).as_posix()
+    except ValueError:
+        return False
+    if guard.config.permissions.respect_git_ignore and _is_git_repository(guard):
+        try:
+            code, _, _ = _git(["check-ignore", "-q", "--", rel], guard.session_repo, timeout=5)
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            code = 1
+        return code == 0
+    return _matches_fallback_ignore(path, guard)
+
+
+def _iter_readable_files(guard: PathGuard, *, max_depth: int | None = None):
+    git_files = _git_visible_files(guard)
+    if git_files:
+        for path in git_files:
+            if max_depth is not None:
+                try:
+                    rel_depth = len(path.relative_to(guard.session_repo).parts)
+                except ValueError:
+                    continue
+                if rel_depth > max_depth:
+                    continue
+            yield path
+        return
+
     for root, dirs, files in os.walk(guard.session_repo):
         root_path = Path(root)
         allowed_dirs = []
         for dirname in dirs:
             directory = root_path / dirname
-            if guard.is_writable_artifact(directory):
+            if guard.is_writable_artifact(directory) or _matches_fallback_ignore(directory, guard):
                 continue
             try:
                 guard.resolve_read_path(directory)
             except ValueError:
                 continue
+            if max_depth is not None:
+                try:
+                    rel_depth = len(directory.relative_to(guard.session_repo).parts)
+                except ValueError:
+                    continue
+                if rel_depth >= max_depth:
+                    continue
             allowed_dirs.append(dirname)
         dirs[:] = allowed_dirs
         for filename in files:
             path = root_path / filename
-            if guard.is_writable_artifact(path):
+            if guard.is_writable_artifact(path) or _matches_fallback_ignore(path, guard):
                 continue
             try:
                 guard.resolve_read_path(path)
             except ValueError:
                 continue
+            if max_depth is not None:
+                try:
+                    rel_depth = len(path.relative_to(guard.session_repo).parts)
+                except ValueError:
+                    continue
+                if rel_depth > max_depth:
+                    continue
             yield path
 
 
@@ -109,6 +227,10 @@ def _writable_glob_excludes(guard: PathGuard) -> list[str]:
             continue
         excludes.extend([f"!{rel}", f"!{rel}/**"])
     return excludes
+
+
+def _fallback_glob_excludes(guard: PathGuard) -> list[str]:
+    return ["!" + pattern.replace("\\", "/") for pattern in guard.config.permissions.fallback_ignore_patterns]
 
 
 def _fallback_search(params: SearchTextInput, guard: PathGuard, max_results: int) -> tuple[list[dict[str, Any]], bool]:
@@ -162,6 +284,46 @@ def repo_list_tree(params: ListTreeInput, config: AppConfig | None = None) -> st
     entries: list[dict[str, Any]] = []
     skipped = 0
 
+    git_files = _git_visible_files(guard)
+    if git_files:
+        seen: set[str] = set()
+        for file in sorted(git_files, key=lambda p: guard.relative(p).lower()):
+            if len(entries) >= max_entries:
+                break
+            try:
+                rel_to_root = file.relative_to(root)
+            except ValueError:
+                continue
+            parts = rel_to_root.parts
+            for index, _ in enumerate(parts, start=1):
+                if index > params.max_depth:
+                    break
+                item_path = root / Path(*parts[:index])
+                rel = guard.relative(item_path)
+                if rel in seen:
+                    continue
+                if len(entries) >= max_entries:
+                    skipped += 1
+                    break
+                seen.add(rel)
+                entries.append(
+                    {
+                        "path": rel,
+                        "type": "file" if index == len(parts) else "directory",
+                        "size": item_path.stat().st_size if item_path.is_file() else None,
+                        "depth": index,
+                    }
+                )
+        lines = [f"# 目录树：{guard.relative(root) or '.'}", ""]
+        for item in entries:
+            indent = "  " * max(item["depth"] - 1, 0)
+            suffix = "/" if item["type"] == "directory" else ""
+            lines.append(f"{indent}- {item['path']}{suffix}")
+        if skipped:
+            lines.append(f"\n已达到数量上限，省略 {skipped} 个分支或条目。")
+        data = {"root": guard.relative(root), "entries": entries, "truncated": bool(skipped), "source": "git"}
+        return _format(data, "\n".join(lines), params.response_format)
+
     def walk(current: Path, depth: int) -> None:
         nonlocal skipped
         if len(entries) >= max_entries:
@@ -174,7 +336,7 @@ def repo_list_tree(params: ListTreeInput, config: AppConfig | None = None) -> st
         except OSError:
             return
         for child in children:
-            if guard.is_writable_artifact(child):
+            if guard.is_writable_artifact(child) or _matches_fallback_ignore(child, guard):
                 continue
             try:
                 guard.resolve_read_path(child)
@@ -216,6 +378,8 @@ def repo_read_file(params: ReadFileInput, config: AppConfig | None = None) -> st
         return f"Error: 文件不存在：{path}"
     if not path.is_file():
         return f"Error: 路径不是文件：{path}"
+    if _is_ignored(path, guard):
+        return f"Error: 文件被 Git ignore 或 fallback_ignore_patterns 忽略：{guard.relative(path)}"
     if _is_probably_binary(path):
         return f"Error: 拒绝读取疑似二进制文件：{guard.relative(path)}"
 
@@ -250,6 +414,9 @@ def repo_search_text(params: SearchTextInput, config: AppConfig | None = None) -
     ]
     for pattern in cfg.permissions.deny_patterns:
         command.extend(["--glob", "!" + pattern.replace("\\", "/")])
+    if not (cfg.permissions.respect_git_ignore and _is_git_repository(guard)):
+        for pattern in _fallback_glob_excludes(guard):
+            command.extend(["--glob", pattern])
     for pattern in _writable_glob_excludes(guard):
         command.extend(["--glob", pattern])
     if params.glob:
@@ -261,6 +428,7 @@ def repo_search_text(params: SearchTextInput, config: AppConfig | None = None) -
         completed = subprocess.run(
             command,
             cwd=str(guard.session_repo),
+            stdin=subprocess.DEVNULL,
             capture_output=True,
             text=True,
             encoding="utf-8",
@@ -328,22 +496,23 @@ def repo_detect_stack(params: DetectStackInput, config: AppConfig | None = None)
         "Docker": ["Dockerfile", "docker-compose.yml", "compose.yaml"],
     }
     found: dict[str, list[str]] = {}
-    all_files = list(_iter_readable_files(guard))
-    for stack, patterns in markers.items():
-        matched: list[str] = []
-        for file in all_files:
-            rel = guard.relative(file)
+    all_files = list(_iter_readable_files(guard, max_depth=4))
+    for file in all_files:
+        rel = guard.relative(file)
+        name = file.name
+        for stack, patterns in markers.items():
+            if stack in found and len(found[stack]) >= 10:
+                continue
             for pattern in patterns:
-                if file.match(pattern) or Path(rel).match(pattern):
-                    matched.append(rel)
+                if fnmatch(name, pattern) or fnmatch(rel, pattern):
+                    found.setdefault(stack, []).append(rel)
                     break
-        if matched:
-            found[stack] = sorted(set(matched))[:10]
+    found = {stack: sorted(set(files))[:10] for stack, files in found.items()}
 
     scripts: dict[str, Any] = {}
     python_project: dict[str, Any] = {}
     pyproject = guard.session_repo / "pyproject.toml"
-    if pyproject.exists():
+    if pyproject.exists() and not _is_ignored(pyproject, guard):
         try:
             guard.resolve_read_path(pyproject)
             pyproject_data = tomllib.loads(pyproject.read_text(encoding="utf-8"))
@@ -364,7 +533,7 @@ def repo_detect_stack(params: DetectStackInput, config: AppConfig | None = None)
             python_project = {"error": "pyproject.toml 无法解析"}
 
     package_json = guard.session_repo / "package.json"
-    if package_json.exists():
+    if package_json.exists() and not _is_ignored(package_json, guard):
         try:
             guard.resolve_read_path(package_json)
             package_data = json.loads(package_json.read_text(encoding="utf-8"))
@@ -400,37 +569,22 @@ def repo_detect_stack(params: DetectStackInput, config: AppConfig | None = None)
     data = {"stacks": found, "package_scripts": scripts, "python_project": python_project}
     return _format(data, "\n".join(lines), params.response_format)
 
-
-def _git(repo: Path, args: list[str]) -> tuple[int, str, str]:
-    completed = subprocess.run(
-        ["git", *args],
-        cwd=str(repo),
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        timeout=20,
-        check=False,
-    )
-    return completed.returncode, completed.stdout.strip(), completed.stderr.strip()
-
-
 def repo_git_summary(params: GitSummaryInput, config: AppConfig | None = None) -> str:
     """Return read-only Git metadata for the session repository."""
 
     guard = _guard(params.repo_path, config)
-    code, inside, _ = _git(guard.session_repo, ["rev-parse", "--is-inside-work-tree"])
+    code, inside, _ = _git(["rev-parse", "--is-inside-work-tree"], guard.session_repo)
     if code != 0 or inside != "true":
         data = {"is_git_repository": False}
         markdown = "# Git 摘要\n\n该路径不是 Git 仓库，已跳过 Git 摘要。"
         return _format(data, markdown, params.response_format)
-    _, branch, _ = _git(guard.session_repo, ["branch", "--show-current"])
-    _, remote, _ = _git(guard.session_repo, ["remote", "-v"])
-    _, status, _ = _git(guard.session_repo, ["status", "--short"])
-    _, diff_stat, _ = _git(guard.session_repo, ["diff", "--stat"])
+    _, branch, _ = _git(["branch", "--show-current"], guard.session_repo)
+    _, remote, _ = _git(["remote", "-v"], guard.session_repo)
+    _, status, _ = _git(["status", "--short"], guard.session_repo)
+    _, diff_stat, _ = _git(["diff", "--stat"], guard.session_repo)
     _, recent, _ = _git(
-        guard.session_repo,
         ["log", f"-{params.max_commits}", "--pretty=format:%h%x09%ad%x09%s", "--date=short"],
+        guard.session_repo,
     )
     data = {
         "branch": branch,

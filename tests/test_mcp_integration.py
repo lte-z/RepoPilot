@@ -57,6 +57,7 @@ def test_mcp_server_lists_and_calls_repository_tools(tmp_path: Path) -> None:
                 names = {tool.name for tool in listed.tools}
                 assert "repo_list_tree" in names
                 assert "repo_detect_stack" in names
+                assert "web_fetch_url" in names
 
                 result = await session.call_tool(
                     "repo_detect_stack",

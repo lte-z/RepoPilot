@@ -9,7 +9,7 @@ import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Callable, Literal
 
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
@@ -41,6 +41,7 @@ MODE_INSTRUCTIONS: dict[Mode, str] = {
     "module-map": "梳理模块地图：目录职责、入口文件、核心模块关系。",
     "task-brief": "生成任务简报：围绕用户任务搜索相关文件，给阅读顺序和风险点。",
 }
+ProgressCallback = Callable[[str], None]
 
 
 def validate_mode(mode: str) -> Mode:
@@ -87,6 +88,18 @@ def _tool_result_text(result: Any) -> str:
         if text is not None:
             chunks.append(text)
     return "\n".join(chunks) if chunks else str(result)
+
+
+def _emit(progress: ProgressCallback | None, message: str) -> None:
+    if progress:
+        progress(message)
+
+
+async def _with_timeout(awaitable: Any, timeout: float, label: str) -> Any:
+    try:
+        return await asyncio.wait_for(awaitable, timeout=timeout)
+    except TimeoutError as exc:
+        raise TimeoutError(f"{label} 超时（{timeout:g} 秒）。") from exc
 
 
 def _mcp_tool_to_openai(tool: Any) -> dict[str, Any]:
@@ -194,6 +207,7 @@ async def analyze_repository(
     *,
     config_path: str | Path | None = None,
     offline: bool = False,
+    progress: ProgressCallback | None = None,
 ) -> AnalysisResult:
     """Run RepoPilot analysis through MCP tool calls and an OpenAI-compatible model."""
 
@@ -203,6 +217,7 @@ async def analyze_repository(
     config = load_config(config_path)
     guard = PathGuard(config, repo_path)
     if offline:
+        _emit(progress, "使用离线模式调用本地工具。")
         return _offline_report(selected_mode, str(guard.session_repo), task, config)
     if not config.llm.api_key:
         raise RuntimeError("缺少 LLM_API_KEY。请配置 .env，或使用 --offline 验证本地工具链。")
@@ -212,41 +227,56 @@ async def analyze_repository(
         args=["-m", "repopilot.mcp_server"],
         cwd=str(config.project_root),
     )
-    client = AsyncOpenAI(api_key=config.llm.api_key, base_url=config.llm.base_url)
+    client = AsyncOpenAI(api_key=config.llm.api_key, base_url=config.llm.base_url, timeout=config.limits.llm_timeout_seconds)
     messages: list[dict[str, Any]] = [
         {"role": "system", "content": _load_system_prompt()},
         {"role": "user", "content": _build_user_prompt(selected_mode, str(guard.session_repo), task)},
     ]
     logs: list[ToolCallLog] = []
 
+    _emit(progress, "启动本地 MCP server。")
     async with stdio_client(server) as (read, write):
         async with ClientSession(read, write) as session:
-            await session.initialize()
-            listed = await session.list_tools()
+            await _with_timeout(session.initialize(), 30, "MCP 初始化")
+            _emit(progress, "MCP server 已连接，正在读取工具列表。")
+            listed = await _with_timeout(session.list_tools(), 30, "读取 MCP 工具列表")
             openai_tools = [_mcp_tool_to_openai(tool) for tool in listed.tools]
+            _emit(progress, f"已加载 {len(openai_tools)} 个 MCP 工具。")
 
-            for _ in range(config.limits.max_tool_rounds):
-                response = await client.chat.completions.create(
-                    model=config.llm.model,
-                    messages=messages,
-                    tools=openai_tools,
-                    tool_choice="auto",
+            for round_index in range(config.limits.max_tool_rounds):
+                _emit(progress, f"第 {round_index + 1} 轮：请求模型 {config.llm.model}。")
+                response = await _with_timeout(
+                    client.chat.completions.create(
+                        model=config.llm.model,
+                        messages=messages,
+                        tools=openai_tools,
+                        tool_choice="auto",
+                    ),
+                    config.limits.llm_timeout_seconds,
+                    "LLM 请求",
                 )
                 message = response.choices[0].message
                 messages.append(message.model_dump(exclude_none=True))
                 tool_calls = message.tool_calls or []
                 if not tool_calls:
+                    _emit(progress, "模型已返回最终报告。")
                     return AnalysisResult(
                         mode=selected_mode,
                         repo_path=str(guard.session_repo),
                         markdown=message.content or "",
                         tool_calls=logs,
                     )
+                _emit(progress, f"模型请求调用 {len(tool_calls)} 个工具。")
                 for call in tool_calls:
                     args = json.loads(call.function.arguments or "{}")
                     args.setdefault("repo_path", str(guard.session_repo))
                     start = time.perf_counter()
-                    result = await session.call_tool(call.function.name, args)
+                    _emit(progress, f"调用工具：{call.function.name}。")
+                    result = await _with_timeout(
+                        session.call_tool(call.function.name, args),
+                        config.limits.tool_timeout_seconds,
+                        f"工具 {call.function.name}",
+                    )
                     text = _tool_result_text(result)
                     logs.append(
                         ToolCallLog(
@@ -256,6 +286,7 @@ async def analyze_repository(
                             preview=_preview(text),
                         )
                     )
+                    _emit(progress, f"工具完成：{call.function.name}（{logs[-1].duration_ms} ms）。")
                     messages.append(
                         {
                             "role": "tool",
