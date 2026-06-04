@@ -15,6 +15,16 @@ from repopilot.config import AppConfig, LLMSettings
 runner = CliRunner()
 
 
+def _subprocess_env(src_root: Path) -> dict[str, str]:
+    # Windows CI may capture child process output through a non-UTF-8 locale.
+    return {
+        **os.environ,
+        "PYTHONPATH": str(src_root),
+        "PYTHONUTF8": "1",
+        "PYTHONIOENCODING": "utf-8",
+    }
+
+
 def _write_config(tmp_path: Path) -> Path:
     outputs = tmp_path / "outputs"
     outputs.mkdir()
@@ -281,9 +291,10 @@ def test_cli_setup_uses_invocation_cwd_for_runtime_store(tmp_path: Path) -> None
     result = subprocess.run(
         [sys.executable, "-m", "repopilot.cli", "setup", "--skip-api-key"],
         cwd=project,
-        env={**os.environ, "PYTHONPATH": str(src_root)},
+        env=_subprocess_env(src_root),
         capture_output=True,
         text=True,
+        encoding="utf-8",
         check=True,
     )
 
@@ -300,9 +311,10 @@ def test_cli_setup_can_use_provider_preset(tmp_path: Path) -> None:
     subprocess.run(
         [sys.executable, "-m", "repopilot.cli", "setup", "--skip-api-key", "--provider", "gemini"],
         cwd=project,
-        env={**os.environ, "PYTHONPATH": str(src_root)},
+        env=_subprocess_env(src_root),
         capture_output=True,
         text=True,
+        encoding="utf-8",
         check=True,
     )
 
