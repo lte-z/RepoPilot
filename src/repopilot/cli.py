@@ -118,6 +118,16 @@ def _hard_clear() -> None:
     console.clear()
 
 
+def _set_terminal_title(title: str) -> None:
+    if not console.is_terminal:
+        return
+    safe_title = title.replace("\a", "").replace("\033", "").strip()
+    if not safe_title:
+        return
+    console.file.write(f"\033]0;{safe_title}\a")
+    console.file.flush()
+
+
 def _is_compact(config_path: str | Path | None = None) -> bool:
     try:
         compact_width = load_config(config_path).ui.compact_width
@@ -808,12 +818,14 @@ def _chat_loop(session: ChatSession) -> None:
 def _start_chat(repo_path: str, config_path: str | None, offline: bool, *, clear_screen: bool = True) -> None:
     _authorize_repo_if_needed(repo_path, config_path)
     session = ChatSession(repo_path, config_path=config_path, offline=offline)
+    _set_terminal_title(f"RepoPilot / v{__version__} · {Path(session.state.repo_path).name}")
     if clear_screen:
         _hard_clear()
     _chat_loop(session)
 
 
 def _guided_entry() -> None:
+    _set_terminal_title(f"RepoPilot / v{__version__}")
     _hard_clear()
     ensure_local_settings()
     _print_banner()
