@@ -1,7 +1,7 @@
 # Secrets
+.repopilot/
 .env
 .env.*
-!.env.example
 config.yaml
 config.local.yaml
 
@@ -21,9 +21,6 @@ env/
 build/
 dist/
 *.egg-info/
-
-# Runtime outputs
-outputs/*
 
 # Editor and OS files
 .DS_Store

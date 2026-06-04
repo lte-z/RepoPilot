@@ -13,12 +13,14 @@ from repopilot.tools.repository import (
     ResponseFormat,
     SaveReportInput,
     SearchTextInput,
+    SymbolMapInput,
     repo_detect_stack,
     repo_git_summary,
     repo_list_tree,
     repo_read_file,
     repo_save_report,
     repo_search_text,
+    repo_symbol_map,
 )
 
 
@@ -99,6 +101,29 @@ async def mcp_repo_detect_stack(repo_path: str, response_format: ResponseFormat 
 
 
 @mcp.tool(
+    name="repo_symbol_map",
+    annotations={"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False},
+)
+async def mcp_repo_symbol_map(
+    repo_path: str,
+    include_globs: list[str] | None = None,
+    max_files: int = 80,
+    max_symbols_per_file: int = 40,
+    response_format: ResponseFormat = "markdown",
+) -> str:
+    """Build a lightweight class/function symbol map for readable source files."""
+
+    params = SymbolMapInput(
+        repo_path=repo_path,
+        include_globs=include_globs,
+        max_files=max_files,
+        max_symbols_per_file=max_symbols_per_file,
+        response_format=response_format,
+    )
+    return repo_symbol_map(params)
+
+
+@mcp.tool(
     name="repo_git_summary",
     annotations={"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False},
 )
@@ -122,7 +147,7 @@ async def mcp_repo_save_report(
     content: str,
     response_format: ResponseFormat = "markdown",
 ) -> str:
-    """Save a generated Markdown report under RepoPilot outputs/."""
+    """Save a generated Markdown report under RepoPilot's configured reports directory."""
 
     params = SaveReportInput(filename=filename, content=content, response_format=response_format)
     return repo_save_report(params)

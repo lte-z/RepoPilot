@@ -42,3 +42,58 @@ permissions:
     config = load_config(config_path)
 
     assert config.permissions.readable_roots.count(str(repo.resolve())) == 1
+
+
+def test_modes_config_loads_tool_budget_matrix(tmp_path: Path) -> None:
+    config_path = tmp_path / "repopilot.yaml"
+    config_path.write_text(
+        """
+permissions:
+  readable_roots:
+    - ./repos
+  writable_roots:
+    - ./outputs
+modes:
+  deep-scan:
+    model: deepseek-chat
+    max_tool_rounds: 12
+    enabled_tools:
+      - repo_list_tree
+      - repo_symbol_map
+""",
+        encoding="utf-8",
+    )
+
+    config = load_config(config_path)
+
+    assert config.modes["deep-scan"].model == "deepseek-chat"
+    assert config.modes["deep-scan"].max_tool_rounds == 12
+    assert "repo_symbol_map" in config.modes["deep-scan"].enabled_tools
+
+
+def test_ui_config_loads_terminal_preferences(tmp_path: Path) -> None:
+    config_path = tmp_path / "repopilot.yaml"
+    config_path.write_text(
+        """
+permissions:
+  readable_roots:
+    - .
+  writable_roots:
+    - ./outputs
+ui:
+  animations: false
+  show_user_turns: false
+  keep_progress_log: true
+  logo: none
+  compact_width: 100
+""",
+        encoding="utf-8",
+    )
+
+    config = load_config(config_path)
+
+    assert config.ui.animations is False
+    assert config.ui.show_user_turns is False
+    assert config.ui.keep_progress_log is True
+    assert config.ui.logo == "none"
+    assert config.ui.compact_width == 100

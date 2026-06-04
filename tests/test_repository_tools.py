@@ -10,12 +10,14 @@ from repopilot.tools.repository import (
     ReadFileInput,
     SaveReportInput,
     SearchTextInput,
+    SymbolMapInput,
     repo_detect_stack,
     repo_git_summary,
     repo_list_tree,
     repo_read_file,
     repo_save_report,
     repo_search_text,
+    repo_symbol_map,
 )
 
 
@@ -205,6 +207,49 @@ def test_git_summary_non_git_repo_is_informational(tmp_path: Path) -> None:
 
     assert "已跳过 Git 摘要" in summary
     assert not summary.startswith("Error:")
+
+
+def test_symbol_map_extracts_python_ts_and_cpp_symbols(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "app.py").write_text(
+        """
+class Service:
+    def run(self, value):
+        return value
+
+async def load_config(path):
+    return path
+""",
+        encoding="utf-8",
+    )
+    (repo / "ui.ts").write_text(
+        """
+export class Panel {}
+export function renderPanel(target: string) {}
+const useThing = (value: string) => value
+""",
+        encoding="utf-8",
+    )
+    (repo / "core.cpp").write_text(
+        """
+struct Point {};
+int add(int left, int right) {
+  return left + right;
+}
+""",
+        encoding="utf-8",
+    )
+    config = make_config(tmp_path, tmp_path / "outputs")
+
+    text = repo_symbol_map(SymbolMapInput(repo_path=str(repo)), config)
+    payload = repo_symbol_map(SymbolMapInput(repo_path=str(repo), response_format="json"), config)
+    data = json.loads(payload)
+
+    assert "Service" in text
+    assert "renderPanel" in text
+    assert "Point" in text
+    assert any(file["path"] == "app.py" for file in data["files"])
 
 
 

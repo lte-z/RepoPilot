@@ -64,7 +64,7 @@ HTML = """
     <section class="panel">
       <div class="grid">
         <label>仓库路径<input id="repo" value="." placeholder="输入位于 readable_roots 下的仓库路径"></label>
-        <label>模式<select id="mode"><option>overview</option><option>runbook</option><option>module-map</option><option>task-brief</option></select></label>
+        <label>模式<select id="mode"><option>overview</option><option>runbook</option><option>module-map</option><option>task-brief</option><option>deep-scan</option></select></label>
         <label>任务文本<input id="task" placeholder="task-brief 模式使用"></label>
         <label><span>&nbsp;</span><button id="run">分析</button></label>
       </div>

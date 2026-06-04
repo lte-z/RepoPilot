@@ -7,12 +7,18 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from dotenv import load_dotenv
 from pydantic import BaseModel, Field
 
+from .settings_store import (
+    LOCAL_CONFIG_PATH,
+    LOCAL_ENV_PATH,
+    PROJECT_ROOT,
+    DEFAULT_FALLBACK_IGNORE_PATTERNS,
+    ensure_local_settings,
+    read_env_file,
+)
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_CONFIG_PATH = PROJECT_ROOT / "config.example.yaml"
+DEFAULT_CONFIG_PATH = LOCAL_CONFIG_PATH
 
 
 class PermissionSettings(BaseModel):
@@ -21,32 +27,25 @@ class PermissionSettings(BaseModel):
     readable_roots: list[str] = Field(default_factory=list)
     writable_roots: list[str] = Field(default_factory=list)
     deny_patterns: list[str] = Field(default_factory=list)
-    fallback_ignore_patterns: list[str] = Field(default_factory=lambda: [
-        "**/.next/**",
-        "**/.nuxt/**",
-        "**/.parcel-cache/**",
-        "**/.svelte-kit/**",
-        "**/.turbo/**",
-        "**/.vs/**",
-        "**/build/**",
-        "**/coverage/**",
-        "**/debug/**",
-        "**/dist/**",
-        "**/*.egg-info/**",
-        "**/.mypy_cache/**",
-        "**/node_modules/**",
-        "**/out/**",
-        "**/.pytest_cache/**",
-        "**/.ruff_cache/**",
-        "**/release/**",
-        "**/target/**",
-        "**/__pycache__/**",
-    ])
+    fallback_ignore_patterns: list[str] = Field(default_factory=lambda: list(DEFAULT_FALLBACK_IGNORE_PATTERNS))
 
 
 class ExecutionSettings(BaseModel):
     allow_command_execution: bool = False
     allowed_commands: list[str] = Field(default_factory=list)
+
+
+class IntentSettings(BaseModel):
+    use_llm_router: bool = True
+    fallback_to_rules: bool = True
+    min_confidence: float = 0.55
+    max_prompt_context_chars: int = 2500
+
+
+class ModeSettings(BaseModel):
+    model: str | None = None
+    max_tool_rounds: int | None = None
+    enabled_tools: list[str] = Field(default_factory=list)
 
 
 class LimitSettings(BaseModel):
@@ -56,12 +55,16 @@ class LimitSettings(BaseModel):
     max_tool_rounds: int = 8
     llm_timeout_seconds: float = 120
     tool_timeout_seconds: float = 60
+    intent_timeout_seconds: float = 15
+    max_context_artifacts: int = 3
+    max_repeated_tool_calls: int = 1
 
 
 class LLMSettings(BaseModel):
-    base_url: str = "https://api.deepseek.com"
+    provider: str = ""
+    base_url: str = ""
     api_key: str = ""
-    model: str = "deepseek-v4-flash"
+    model: str = ""
 
 
 class NetworkSettings(BaseModel):
@@ -72,11 +75,22 @@ class NetworkSettings(BaseModel):
     max_fetch_chars: int = 20_000
 
 
+class UISettings(BaseModel):
+    animations: bool = True
+    show_user_turns: bool = True
+    keep_progress_log: bool = False
+    logo: str = "compact"
+    compact_width: int = 92
+
+
 class AppConfig(BaseModel):
     permissions: PermissionSettings = Field(default_factory=PermissionSettings)
     execution: ExecutionSettings = Field(default_factory=ExecutionSettings)
+    intent: IntentSettings = Field(default_factory=IntentSettings)
     limits: LimitSettings = Field(default_factory=LimitSettings)
     network: NetworkSettings = Field(default_factory=NetworkSettings)
+    ui: UISettings = Field(default_factory=UISettings)
+    modes: dict[str, ModeSettings] = Field(default_factory=dict)
     llm: LLMSettings = Field(default_factory=LLMSettings)
     config_path: Path = DEFAULT_CONFIG_PATH
     project_root: Path = PROJECT_ROOT
@@ -112,31 +126,40 @@ def _resolve_permission_paths(data: dict[str, Any], base_dir: Path) -> dict[str,
 
 
 def _select_config_path(config_path: str | Path | None = None) -> Path:
-    selected = Path(
-        config_path
-        or os.getenv("REPOPILOT_CONFIG")
-        or DEFAULT_CONFIG_PATH
-    ).expanduser()
+    selected_value = config_path or os.getenv("REPOPILOT_CONFIG")
+    if selected_value:
+        selected = Path(selected_value).expanduser()
+    else:
+        selected, _ = ensure_local_settings()
     if not selected.is_absolute():
         selected = (PROJECT_ROOT / selected).resolve()
     return selected
 
 
+def _load_llm_settings() -> LLMSettings:
+    values = read_env_file(LOCAL_ENV_PATH)
+
+    def pick(key: str, default: str = "") -> str:
+        return values.get(key) or os.getenv(key, default)
+
+    return LLMSettings(
+        provider=pick("LLM_PROVIDER", ""),
+        base_url=pick("LLM_BASE_URL", ""),
+        api_key=pick("LLM_API_KEY", ""),
+        model=pick("LLM_MODEL", ""),
+    )
+
+
 def load_config(config_path: str | Path | None = None) -> AppConfig:
     """Load RepoPilot configuration and environment variables."""
 
-    load_dotenv(PROJECT_ROOT / ".env")
     selected = _select_config_path(config_path)
     data = _load_yaml(selected)
     data = _resolve_permission_paths(data, selected.parent)
     data.pop("llm", None)
     data.pop("config_path", None)
     data.pop("project_root", None)
-    llm = LLMSettings(
-        base_url=os.getenv("LLM_BASE_URL", "https://api.deepseek.com"),
-        api_key=os.getenv("LLM_API_KEY", ""),
-        model=os.getenv("LLM_MODEL", "deepseek-v4-flash"),
-    )
+    llm = _load_llm_settings()
     return AppConfig(**data, llm=llm, config_path=selected.resolve())
 
 
@@ -144,9 +167,6 @@ def append_readable_root(config_path: str | Path | None, root: str | Path) -> Pa
     """Append an absolute readable root to the selected local YAML config."""
 
     selected = _select_config_path(config_path)
-    if selected.resolve() == DEFAULT_CONFIG_PATH.resolve():
-        raise ValueError("当前使用的是 config.example.yaml，请先创建本地 config.yaml 后再持久授权。")
-
     data = _load_yaml(selected)
     permissions = data.setdefault("permissions", {})
     if not isinstance(permissions, dict):

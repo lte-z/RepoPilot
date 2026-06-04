@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import json
 import os
 import re
@@ -53,8 +54,15 @@ class GitSummaryInput(RepoPathInput):
     response_format: ResponseFormat = "markdown"
 
 
+class SymbolMapInput(RepoPathInput):
+    include_globs: list[str] | None = Field(default=None, description="Optional file glob filters.")
+    max_files: int = Field(default=80, ge=1, le=500, description="Maximum source files to inspect.")
+    max_symbols_per_file: int = Field(default=40, ge=1, le=200, description="Maximum symbols per file.")
+    response_format: ResponseFormat = "markdown"
+
+
 class SaveReportInput(BaseModel):
-    filename: str = Field(description="Report filename under outputs/.")
+    filename: str = Field(description="Report filename under the configured reports directory.")
     content: str = Field(description="Markdown report content.")
     response_format: ResponseFormat = "markdown"
 
@@ -143,12 +151,15 @@ def _git_visible_files(guard: PathGuard) -> list[Path]:
         rel = Path(item)
         if rel.is_absolute() or ".." in rel.parts:
             continue
+        candidate = guard.session_repo / rel
+        if not candidate.is_file():
+            continue
         rel_text = rel.as_posix()
         if _matches_any_pattern(rel_text, guard.config.permissions.deny_patterns):
             continue
         if any(rel_text.lower() == root or rel_text.lower().startswith(root + "/") for root in writable_rel_roots):
             continue
-        files.append(guard.session_repo / item)
+        files.append(candidate)
     return files
 
 
@@ -569,6 +580,152 @@ def repo_detect_stack(params: DetectStackInput, config: AppConfig | None = None)
     data = {"stacks": found, "package_scripts": scripts, "python_project": python_project}
     return _format(data, "\n".join(lines), params.response_format)
 
+
+SOURCE_EXTENSIONS = {
+    ".py",
+    ".js",
+    ".jsx",
+    ".ts",
+    ".tsx",
+    ".c",
+    ".cc",
+    ".cpp",
+    ".cxx",
+    ".h",
+    ".hpp",
+    ".hh",
+}
+
+
+def _symbol(kind: str, name: str, line: int, signature: str) -> dict[str, Any]:
+    return {"kind": kind, "name": name, "line": line, "signature": signature.strip()}
+
+
+def _python_symbols(path: Path, max_symbols: int) -> list[dict[str, Any]]:
+    text = path.read_text(encoding="utf-8", errors="replace")
+    try:
+        tree = ast.parse(text)
+    except SyntaxError:
+        return []
+    symbols: list[dict[str, Any]] = []
+
+    def args_signature(node: ast.FunctionDef | ast.AsyncFunctionDef) -> str:
+        args = [arg.arg for arg in node.args.posonlyargs + node.args.args]
+        if node.args.vararg:
+            args.append("*" + node.args.vararg.arg)
+        args.extend(arg.arg for arg in node.args.kwonlyargs)
+        if node.args.kwarg:
+            args.append("**" + node.args.kwarg.arg)
+        prefix = "async def" if isinstance(node, ast.AsyncFunctionDef) else "def"
+        return f"{prefix} {node.name}({', '.join(args)})"
+
+    for node in ast.walk(tree):
+        if len(symbols) >= max_symbols:
+            break
+        if isinstance(node, ast.ClassDef):
+            bases = [getattr(base, "id", "") for base in node.bases]
+            suffix = f"({', '.join(base for base in bases if base)})" if bases else ""
+            symbols.append(_symbol("class", node.name, node.lineno, f"class {node.name}{suffix}"))
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            symbols.append(_symbol("function", node.name, node.lineno, args_signature(node)))
+    return sorted(symbols, key=lambda item: item["line"])[:max_symbols]
+
+
+JS_TS_PATTERNS = [
+    ("class", re.compile(r"^\s*(?:export\s+default\s+|export\s+)?class\s+([A-Za-z_$][\w$]*)")),
+    ("function", re.compile(r"^\s*(?:export\s+)?(?:async\s+)?function\s+([A-Za-z_$][\w$]*)\s*\(([^)]*)\)")),
+    ("function", re.compile(r"^\s*(?:export\s+)?const\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?\(([^)]*)\)\s*=>")),
+    ("function", re.compile(r"^\s*(?:export\s+)?const\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?([A-Za-z_$][\w$]*)\s*=>")),
+]
+
+
+CPP_PATTERNS = [
+    ("class", re.compile(r"^\s*(?:class|struct)\s+([A-Za-z_]\w*)\b")),
+    (
+        "function",
+        re.compile(
+            r"^\s*(?:template\s*<[^>]+>\s*)?"
+            r"(?:[\w:<>~*&]+\s+)+([A-Za-z_]\w*(?:::[A-Za-z_]\w*)?)\s*\([^;{}]*\)\s*(?:const\s*)?(?:\{|;)?"
+        ),
+    ),
+]
+
+
+def _regex_symbols(path: Path, patterns: list[tuple[str, re.Pattern[str]]], max_symbols: int) -> list[dict[str, Any]]:
+    symbols: list[dict[str, Any]] = []
+    try:
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return []
+    for line_no, line in enumerate(lines, start=1):
+        if len(symbols) >= max_symbols:
+            break
+        if line.lstrip().startswith(("//", "#", "*")):
+            continue
+        for kind, pattern in patterns:
+            match = pattern.match(line)
+            if not match:
+                continue
+            name = match.group(1)
+            symbols.append(_symbol(kind, name, line_no, line.strip()))
+            break
+    return symbols
+
+
+def _symbols_for_file(path: Path, max_symbols: int) -> list[dict[str, Any]]:
+    suffix = path.suffix.lower()
+    if suffix == ".py":
+        return _python_symbols(path, max_symbols)
+    if suffix in {".js", ".jsx", ".ts", ".tsx"}:
+        return _regex_symbols(path, JS_TS_PATTERNS, max_symbols)
+    if suffix in {".c", ".cc", ".cpp", ".cxx", ".h", ".hpp", ".hh"}:
+        return _regex_symbols(path, CPP_PATTERNS, max_symbols)
+    return []
+
+
+def repo_symbol_map(params: SymbolMapInput, config: AppConfig | None = None) -> str:
+    """Build a lightweight symbol map for readable source files."""
+
+    cfg = config or load_config()
+    guard = _guard(params.repo_path, cfg)
+    files: list[dict[str, Any]] = []
+    inspected = 0
+    skipped = 0
+    include_globs = params.include_globs or ["*"]
+    for path in _iter_readable_files(guard):
+        rel = guard.relative(path)
+        if path.suffix.lower() not in SOURCE_EXTENSIONS:
+            continue
+        if not any(fnmatch(rel, pattern) or fnmatch(path.name, pattern) for pattern in include_globs):
+            continue
+        if inspected >= params.max_files:
+            skipped += 1
+            continue
+        try:
+            if _is_probably_binary(path):
+                continue
+            symbols = _symbols_for_file(path, params.max_symbols_per_file)
+        except OSError:
+            continue
+        inspected += 1
+        if not symbols:
+            continue
+        files.append({"path": rel, "language": path.suffix.lstrip(".").lower(), "symbols": symbols})
+
+    lines = ["# 符号地图", ""]
+    if not files:
+        lines.append("未识别到可展示的代码符号。")
+    for file in files:
+        lines.append(f"## `{file['path']}`")
+        for item in file["symbols"]:
+            lines.append(f"- L{item['line']} `{item['kind']}` `{item['name']}` - `{item['signature']}`")
+        lines.append("")
+    if skipped:
+        lines.append(f"已达到文件数量上限，省略 {skipped} 个源文件。")
+    data = {"files": files, "inspected_files": inspected, "skipped_files": skipped}
+    return _format(data, "\n".join(lines).strip(), params.response_format)
+
+
 def repo_git_summary(params: GitSummaryInput, config: AppConfig | None = None) -> str:
     """Return read-only Git metadata for the session repository."""
 
@@ -602,16 +759,18 @@ def repo_git_summary(params: GitSummaryInput, config: AppConfig | None = None) -
 
 
 def repo_save_report(params: SaveReportInput, config: AppConfig | None = None) -> str:
-    """Save a Markdown report under the configured outputs directory."""
+    """Save a Markdown report under the configured reports directory."""
 
     cfg = config or load_config()
     guard = PathGuard(cfg, cfg.project_root, validate_session=False)
-    safe_name = Path(params.filename).name
+    safe_name = re.sub(r"[^A-Za-z0-9._-]+", "-", Path(params.filename).name).strip("-")
+    safe_name = safe_name or "repopilot-report.md"
     if not safe_name.endswith(".md"):
         safe_name += ".md"
     output_path = guard.resolve_write_path(safe_name)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(params.content, encoding="utf-8")
+    content = params.content.strip() + "\n"
+    output_path.write_text(content, encoding="utf-8")
     data = {"path": output_path.as_posix(), "chars": len(params.content)}
-    markdown = f"报告已保存：`{output_path}`（{len(params.content)} 字符）"
+    markdown = f"报告已保存：{output_path.as_posix()}（{len(params.content)} 字符）"
     return _format(data, markdown, params.response_format)
