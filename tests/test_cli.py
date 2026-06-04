@@ -90,7 +90,7 @@ def test_cli_overview_offline_runs_with_explicit_config(tmp_path: Path) -> None:
     result = runner.invoke(app, ["overview", str(repo), "--config", str(config_path), "--offline"])
 
     assert result.exit_code == 0
-    assert "Report / overview" in result.stdout
+    assert "报告 / Report · overview" in result.stdout
     assert "repo_list_tree" in result.stdout
 
 
@@ -103,7 +103,7 @@ def test_cli_deep_scan_offline_runs_with_explicit_config(tmp_path: Path) -> None
     result = runner.invoke(app, ["deep-scan", str(repo), "--config", str(config_path), "--offline"])
 
     assert result.exit_code == 0
-    assert "Report / deep-scan" in result.stdout
+    assert "报告 / Report · deep-scan" in result.stdout
     assert "repo_symbol_map" in result.stdout
 
 
@@ -135,7 +135,9 @@ def test_cli_chat_help_and_exit(tmp_path: Path) -> None:
 
     assert result.exit_code == 0
     assert "/overview" in result.stdout
-    assert "RepoPilot Chat" in result.stdout
+    assert "会话状态 / Status" in result.stdout
+    assert "关于 / About" in result.stdout
+    assert "小Z工作室#2026" in result.stdout
 
 
 def test_cli_chat_quick_action_prints_progress(tmp_path: Path) -> None:
@@ -218,9 +220,9 @@ def test_cli_chat_sources_tools_and_artifacts_are_tabular(tmp_path: Path) -> Non
     )
 
     assert result.exit_code == 0
-    assert "Sources" in result.stdout
-    assert "Tools" in result.stdout
-    assert "Artifacts" in result.stdout
+    assert "证据 / Sources" in result.stdout
+    assert "工具 / Tools" in result.stdout
+    assert "报告列表 / Artifacts" in result.stdout
     assert "repo_list_tree" in result.stdout
 
 
@@ -237,7 +239,7 @@ def test_cli_chat_clear_requires_confirmation_and_reprints_dashboard(tmp_path: P
 
     assert result.exit_code == 0
     assert "确认清空当前会话上下文并清屏" in result.stdout
-    assert "Quick Actions" in result.stdout
+    assert "快速动作 / Actions" in result.stdout
 
 
 def test_cli_default_entry_guides_user_into_chat(tmp_path: Path, monkeypatch) -> None:

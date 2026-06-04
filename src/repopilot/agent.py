@@ -64,12 +64,50 @@ class ToolCallLog:
 
 
 @dataclass
+class TokenUsage:
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_tokens: int = 0
+
+    @property
+    def has_tokens(self) -> bool:
+        return self.total_tokens > 0 or self.prompt_tokens > 0 or self.completion_tokens > 0
+
+    def add_response(self, response: Any) -> None:
+        usage = getattr(response, "usage", None)
+        if usage is None:
+            return
+        self.add(
+            prompt_tokens=int(getattr(usage, "prompt_tokens", 0) or 0),
+            completion_tokens=int(getattr(usage, "completion_tokens", 0) or 0),
+            total_tokens=int(getattr(usage, "total_tokens", 0) or 0),
+        )
+
+    def add(self, prompt_tokens: int = 0, completion_tokens: int = 0, total_tokens: int = 0) -> None:
+        self.prompt_tokens += prompt_tokens
+        self.completion_tokens += completion_tokens
+        self.total_tokens += total_tokens or prompt_tokens + completion_tokens
+
+    def merge(self, other: "TokenUsage | None") -> None:
+        if other is None:
+            return
+        self.add(other.prompt_tokens, other.completion_tokens, other.total_tokens)
+
+
+@dataclass
 class AnalysisResult:
     mode: Mode
     repo_path: str
     markdown: str
     tool_calls: list[ToolCallLog] = field(default_factory=list)
     offline: bool = False
+    token_usage: TokenUsage | None = None
+
+
+@dataclass
+class ChatReply:
+    markdown: str
+    token_usage: TokenUsage | None = None
 
 
 def _load_system_prompt() -> str:
@@ -297,6 +335,7 @@ async def analyze_repository(
     ]
     logs: list[ToolCallLog] = []
     repeated_calls: dict[str, int] = {}
+    token_usage = TokenUsage()
 
     try:
         _emit(progress, "启动本地 MCP server。")
@@ -321,6 +360,7 @@ async def analyze_repository(
                         config.limits.llm_timeout_seconds,
                         "LLM 请求",
                     )
+                    token_usage.add_response(response)
                     message = response.choices[0].message
                     messages.append(message.model_dump(exclude_none=True))
                     tool_calls = message.tool_calls or []
@@ -331,6 +371,7 @@ async def analyze_repository(
                             repo_path=str(guard.session_repo),
                             markdown=message.content or "",
                             tool_calls=logs,
+                            token_usage=token_usage if token_usage.has_tokens else None,
                         )
                     _emit(progress, f"模型请求调用 {len(tool_calls)} 个工具。")
                     for call in tool_calls:
@@ -396,12 +437,14 @@ async def analyze_repository(
                     config.limits.llm_timeout_seconds,
                     "LLM 收束请求",
                 )
+                token_usage.add_response(response)
                 message = response.choices[0].message
                 return AnalysisResult(
                     mode=selected_mode,
                     repo_path=str(guard.session_repo),
                     markdown=message.content or "## 结论\n\n工具轮次预算已用尽，且模型没有返回可用内容。",
                     tool_calls=logs,
+                    token_usage=token_usage if token_usage.has_tokens else None,
                 )
     finally:
         await client.close()
@@ -415,12 +458,12 @@ async def chat_without_tools(
     context: str = "",
     config_path: str | Path | None = None,
     offline: bool = False,
-) -> str:
+) -> ChatReply:
     """Answer a normal chat turn without exposing MCP tools."""
 
     config = load_config(config_path)
     if offline or not config.llm.api_key or not config.llm.base_url or not config.llm.model:
-        return ""
+        return ChatReply("")
     client = AsyncOpenAI(api_key=config.llm.api_key, base_url=config.llm.base_url, timeout=config.limits.llm_timeout_seconds)
     user_content = message if not context else f"{message}\n\n当前会话上下文：\n{context}"
     try:
@@ -435,7 +478,9 @@ async def chat_without_tools(
             config.limits.llm_timeout_seconds,
             "普通对话请求",
         )
-        return response.choices[0].message.content or ""
+        usage = TokenUsage()
+        usage.add_response(response)
+        return ChatReply(response.choices[0].message.content or "", usage if usage.has_tokens else None)
     finally:
         await client.close()
 
@@ -444,5 +489,5 @@ def run_analysis(*args: Any, **kwargs: Any) -> AnalysisResult:
     return asyncio.run(analyze_repository(*args, **kwargs))
 
 
-def run_plain_chat(*args: Any, **kwargs: Any) -> str:
+def run_plain_chat(*args: Any, **kwargs: Any) -> ChatReply:
     return asyncio.run(chat_without_tools(*args, **kwargs))

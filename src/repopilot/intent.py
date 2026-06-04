@@ -41,6 +41,9 @@ class IntentDecision(BaseModel):
     clarifying_question: str | None = None
     reason: str = ""
     source: Literal["llm", "rules", "fallback"] = "llm"
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_tokens: int = 0
 
 
 COMMAND_SPECS: dict[str, dict[str, object]] = {

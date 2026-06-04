@@ -67,6 +67,19 @@ def _normalize_decision(decision: IntentDecision, message: str) -> IntentDecisio
     return decision
 
 
+def _apply_usage(decision: IntentDecision, response: Any) -> IntentDecision:
+    usage = getattr(response, "usage", None)
+    if usage is None:
+        return decision
+    prompt_tokens = int(getattr(usage, "prompt_tokens", 0) or 0)
+    completion_tokens = int(getattr(usage, "completion_tokens", 0) or 0)
+    total_tokens = int(getattr(usage, "total_tokens", 0) or 0) or prompt_tokens + completion_tokens
+    decision.prompt_tokens = prompt_tokens
+    decision.completion_tokens = completion_tokens
+    decision.total_tokens = total_tokens
+    return decision
+
+
 async def decide_intent(
     message: str,
     *,
@@ -118,6 +131,7 @@ async def decide_intent(
         raw = response.choices[0].message.content or ""
         data = _extract_json(raw)
         decision = _normalize_decision(IntentDecision.model_validate({**data, "source": "llm"}), message)
+        decision = _apply_usage(decision, response)
     except (Exception, ValidationError) as exc:
         if config.intent.fallback_to_rules:
             return _fallback_decision(message, has_context, f"Intent router 失败：{exc}")

@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from repopilot.agent import _mcp_server_environment, _tool_allowed_for_mode, run_analysis
+from repopilot.agent import TokenUsage, _mcp_server_environment, _tool_allowed_for_mode, run_analysis
 from repopilot.config import AppConfig, LimitSettings, NetworkSettings, PermissionSettings
 
 
@@ -114,3 +114,21 @@ def test_mcp_server_environment_inherits_selected_config(tmp_path: Path) -> None
 
     assert env["REPOPILOT_CONFIG"] == str(config_path)
     assert env["REPOPILOT_PROJECT_ROOT"] == str(project_root)
+
+
+def test_token_usage_merges_response_usage() -> None:
+    class Usage:
+        prompt_tokens = 10
+        completion_tokens = 5
+        total_tokens = 15
+
+    class Response:
+        usage = Usage()
+
+    usage = TokenUsage()
+    usage.add_response(Response())
+    usage.add(prompt_tokens=2, completion_tokens=3)
+
+    assert usage.prompt_tokens == 12
+    assert usage.completion_tokens == 8
+    assert usage.total_tokens == 20

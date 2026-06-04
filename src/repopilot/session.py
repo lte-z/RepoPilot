@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Literal, cast
 
-from .agent import AnalysisResult, Mode, run_analysis, run_plain_chat
+from .agent import AnalysisResult, Mode, TokenUsage, run_analysis, run_plain_chat
 from .config import load_config
 from .intent import IntentDecision
 from .intent_agent import run_intent_router
@@ -41,6 +41,7 @@ class Artifact:
     mode: str
     markdown: str
     saved_path: str | None = None
+    token_usage: TokenUsage | None = None
     created_at: float = field(default_factory=time.time)
 
 
@@ -110,6 +111,22 @@ def _normalize_report_markdown(title: str, markdown: str) -> str:
     return f"# {title}\n\n" + "\n".join(lines).strip() + "\n"
 
 
+def _usage_from_decision(decision: IntentDecision) -> TokenUsage | None:
+    usage = TokenUsage(
+        prompt_tokens=decision.prompt_tokens,
+        completion_tokens=decision.completion_tokens,
+        total_tokens=decision.total_tokens,
+    )
+    return usage if usage.has_tokens else None
+
+
+def _merge_usage(*items: TokenUsage | None) -> TokenUsage | None:
+    merged = TokenUsage()
+    for item in items:
+        merged.merge(item)
+    return merged if merged.has_tokens else None
+
+
 class ChatSession:
     """A lightweight conversation wrapper around RepoPilot quick actions."""
 
@@ -147,17 +164,19 @@ class ChatSession:
             title=title or _title_for_mode(result.mode, result.repo_path),
             mode=result.mode,
             markdown=result.markdown,
+            token_usage=result.token_usage,
         )
         self.state.artifacts.append(artifact)
         self.state.messages.append(SessionMessage(role="assistant", content=result.markdown))
         return artifact
 
-    def _record_chat_reply(self, title: str, markdown: str) -> Artifact:
+    def _record_chat_reply(self, title: str, markdown: str, token_usage: TokenUsage | None = None) -> Artifact:
         artifact = Artifact(
             id=uuid.uuid4().hex[:10],
             title=title,
             mode="chat",
             markdown=markdown.strip() + "\n",
+            token_usage=token_usage,
         )
         self.state.artifacts.append(artifact)
         self.state.messages.append(SessionMessage(role="assistant", content=artifact.markdown))
@@ -244,9 +263,9 @@ class ChatSession:
             ]
         )
 
-    def _plain_chat_reply(self, message: str, fallback: str) -> str:
+    def _plain_chat_reply(self, message: str, fallback: str) -> tuple[str, TokenUsage | None]:
         try:
-            answer = run_plain_chat(
+            reply = run_plain_chat(
                 message,
                 context=self._context_snippet(),
                 config_path=self.config_path,
@@ -254,8 +273,10 @@ class ChatSession:
             )
         except Exception:
             # Plain chat is optional; keep the session usable if the no-tools LLM turn fails.
-            answer = ""
-        return answer.strip() if answer.strip() else fallback
+            reply = None
+        if reply and reply.markdown.strip():
+            return reply.markdown.strip(), reply.token_usage
+        return fallback, None
 
     def run_quick_action(self, mode: Mode, task: str | None = None, progress: ProgressCallback | None = None) -> Artifact:
         self.state.messages.append(SessionMessage(role="user", content=f"/{mode}" + (f" {task}" if task else "")))
@@ -274,34 +295,35 @@ class ChatSession:
         if progress:
             progress("正在识别意图。")
         decision = self.classify(message)
+        intent_usage = _usage_from_decision(decision)
         if progress:
             progress(f"意图：{decision.intent}（{decision.source}，{decision.reason}）。")
 
         if decision.intent == "meta_help":
-            return self._record_chat_reply("能力说明", self._capability_reply())
+            return self._record_chat_reply("能力说明", self._capability_reply(), intent_usage)
         if decision.intent == "config_request":
-            return self._record_chat_reply("配置说明", self._config_reply())
+            return self._record_chat_reply("配置说明", self._config_reply(), intent_usage)
         if decision.intent == "ambiguous":
             question = decision.clarifying_question or "我不确定你想聊天、配置，还是分析仓库。可以换一种更明确的说法吗？"
-            return self._record_chat_reply("澄清", f"## 我需要确认一下\n\n{question}")
+            return self._record_chat_reply("澄清", f"## 我需要确认一下\n\n{question}", intent_usage)
         if decision.intent == "casual_chat":
             fallback = (
                 "## 我在\n\n"
                 "我可以普通聊天，但我的专长是帮你理解当前选择的代码仓库。"
                 "如果你想让我读取仓库，请说“分析这个仓库”“生成运行手册”，或使用 `/overview`、`/task-brief <任务>`。"
             )
-            return self._record_chat_reply(
-                "对话",
-                self._plain_chat_reply(message, fallback),
-            )
+            reply, token_usage = self._plain_chat_reply(message, fallback)
+            return self._record_chat_reply("对话", reply, _merge_usage(intent_usage, token_usage))
         if decision.intent == "explain_context":
             fallback = self._explain_context_reply(message)
-            return self._record_chat_reply("上下文解释", self._plain_chat_reply(message, fallback))
+            reply, token_usage = self._plain_chat_reply(message, fallback)
+            return self._record_chat_reply("上下文解释", reply, _merge_usage(intent_usage, token_usage))
 
         if not decision.needs_tools or decision.mode is None:
             return self._record_chat_reply(
                 "澄清",
                 "## 我需要确认一下\n\n意图识别没有给出可执行的仓库分析模式。你可以使用 `/overview`、`/runbook` 或 `/task-brief <任务>`。",
+                intent_usage,
             )
 
         mode_by_intent: dict[str, Mode] = {
@@ -323,6 +345,7 @@ class ChatSession:
             offline=self.offline,
             progress=progress,
         )
+        result.token_usage = _merge_usage(intent_usage, result.token_usage)
         return self._record_result(result)
 
     def save_artifact(self, artifact_id: str | None = None, filename: str | None = None) -> str:

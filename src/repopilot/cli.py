@@ -19,6 +19,7 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
+from . import __version__
 from .agent import AnalysisResult, run_analysis
 from .config import append_readable_root, load_config
 from .intent import validate_slash_command
@@ -53,6 +54,27 @@ app = typer.Typer(
 config_app = typer.Typer(help="查看和修改 RepoPilot 本地配置。", no_args_is_help=True, rich_markup_mode="rich")
 network_app = typer.Typer(help="管理联网工具开关。", no_args_is_help=True, rich_markup_mode="rich")
 console = Console()
+
+TITLE_ABOUT = "关于 / About"
+TITLE_ACTIONS = "快速动作 / Actions"
+TITLE_ANSWER = "回复 / Answer"
+TITLE_ARTIFACTS = "报告列表 / Artifacts"
+TITLE_CHAT = "会话状态 / Status"
+TITLE_COMMAND = "命令 / Command"
+TITLE_CONFIG = "配置 / Config"
+TITLE_ERROR = "错误 / Error"
+TITLE_HELP = "帮助 / Help"
+TITLE_INPUT = "输入规则 / Input"
+TITLE_PROVIDER = "模型供应商 / Provider"
+TITLE_REPORT = "报告 / Report"
+TITLE_SETTINGS = "设置 / Settings"
+TITLE_SETUP = "初始化 / Setup"
+TITLE_SOURCES = "证据 / Sources"
+TITLE_STATUS = "状态 / Status"
+TITLE_THINKING = "运行中 / Thinking"
+TITLE_TOOLS = "工具 / Tools"
+TITLE_TRACE = "执行轨迹 / Trace"
+TITLE_USER = "你 / You"
 
 LOGO_TEXT = r"""
     ____                   ____  _ __      __
@@ -162,12 +184,25 @@ def _print_table(table: Table, title: str, style: str = "blue") -> None:
     console.print(_panel(table, title, style))
 
 
-def _turn_divider(status: str = "已完成", elapsed_seconds: float | None = None, tool_calls: int | None = None) -> None:
-    parts = ["RepoPilot", status]
+def _format_token_usage(token_usage: Any | None) -> str | None:
+    total = getattr(token_usage, "total_tokens", 0) if token_usage else 0
+    return f"{int(total):,} tokens" if total else None
+
+
+def _turn_divider(
+    status: str = "已完成",
+    elapsed_seconds: float | None = None,
+    tool_calls: int | None = None,
+    token_usage: Any | None = None,
+) -> None:
+    parts = [status]
     if elapsed_seconds is not None:
         parts.append(f"{elapsed_seconds:.1f}s")
     if tool_calls is not None:
-        parts.append(f"{tool_calls} 次工具调用")
+        parts.append(f"工具调用 {tool_calls}")
+    token_text = _format_token_usage(token_usage)
+    if token_text:
+        parts.append(token_text)
     text = Text(f"─ {' · '.join(parts)} ─", style="dim")
     console.print(Align.center(text))
 
@@ -180,7 +215,7 @@ def _progress_log_panel(events: list[str]) -> None:
     table.add_column("事件")
     for index, event in enumerate(events, start=1):
         table.add_row(str(index), _console_safe(_preview_text(event, 140)))
-    _print_table(table, "Trace", "magenta")
+    _print_table(table, TITLE_TRACE, "magenta")
 
 
 def _logo_panel(config_path: str | Path | None = None) -> Panel:
@@ -196,7 +231,7 @@ def _logo_panel(config_path: str | Path | None = None) -> Panel:
         Align.center(title),
         Align.center(Text("Read-only repository reconnaissance agent", style="dim")),
     )
-    return _panel(body, "RepoPilot", "cyan")
+    return _panel(body, f"RepoPilot / v{__version__}", "cyan")
 
 
 def _select_provider() -> bool:
@@ -205,12 +240,12 @@ def _select_provider() -> bool:
         table = Table.grid(padding=(0, 1))
         table.add_column(style="dim", no_wrap=True)
         table.add_column()
-        table.add_row("Provider", current.llm.provider or "<empty>")
+        table.add_row("供应商 / Provider", current.llm.provider or "<empty>")
         table.add_row("Base URL", current.llm.base_url or "<empty>")
         table.add_row("Model", current.llm.model or "<empty>")
-        console.print(_panel(table, "Provider", "blue"))
+        console.print(_panel(table, TITLE_PROVIDER, "blue"))
         if not typer.confirm("是否修改 LLM 供应商配置？", default=False):
-            _message("已取消，现有供应商配置保持不变。", "Provider", "yellow")
+            _message("已取消，现有供应商配置保持不变。", TITLE_PROVIDER, "yellow")
             return False
     table = _data_table()
     table.add_column("编号")
@@ -222,7 +257,7 @@ def _select_provider() -> bool:
         table.add_row(str(index), preset[0], preset[1], preset[2])
     custom_choice = str(len(preset_items) + 1)
     table.add_row(custom_choice, "OpenAI-compatible 自定义", "手动输入", "手动输入")
-    _print_table(table, "Provider", "blue")
+    _print_table(table, TITLE_PROVIDER, "blue")
     while True:
         choice = typer.prompt("供应商编号").strip()
         if choice.isdigit() and 1 <= int(choice) <= len(preset_items):
@@ -233,11 +268,11 @@ def _select_provider() -> bool:
             base_url = typer.prompt("Base URL").strip()
             model = typer.prompt("模型名称").strip()
             break
-        _message(f"请输入 1 到 {custom_choice} 之间的编号。", "Provider", "yellow")
+        _message(f"请输入 1 到 {custom_choice} 之间的编号。", TITLE_PROVIDER, "yellow")
     update_env_value("LLM_PROVIDER", provider)
     update_env_value("LLM_BASE_URL", base_url)
     update_env_value("LLM_MODEL", model)
-    _message(f"已选择供应商：{provider} / {model}", "Provider", "green")
+    _message(f"已选择供应商：{provider} / {model}", TITLE_PROVIDER, "green")
     return True
 
 
@@ -249,9 +284,9 @@ def _show_result(result: AnalysisResult) -> None:
     for item in result.tool_calls:
         table.add_row(item.name, f"{item.duration_ms} ms", _console_safe(_preview_text(item.preview)))
     if result.tool_calls:
-        _print_table(table, "Tool Timeline", "magenta")
+        _print_table(table, TITLE_TRACE, "magenta")
     meta = f"{result.mode} | {len(result.tool_calls)} tool calls | {'offline' if result.offline else 'online'}"
-    console.print(_panel(result.markdown, f"Report / {meta}", "cyan"))
+    console.print(_panel(result.markdown, f"{TITLE_REPORT} · {meta}", "cyan"))
 
 
 def _save_if_needed(result: AnalysisResult, save: bool, config_path: str | None) -> str | None:
@@ -259,12 +294,12 @@ def _save_if_needed(result: AnalysisResult, save: bool, config_path: str | None)
         return None
     filename = f"{Path(result.repo_path).name}-{result.mode}.md"
     text = repo_save_report(SaveReportInput(filename=filename, content=result.markdown), load_config(config_path))
-    _message(text, "Status", "green")
+    _message(text, TITLE_STATUS, "green")
     return text
 
 
 def _result_payload(result: AnalysisResult, saved: str | None = None) -> dict[str, object]:
-    return {
+    payload: dict[str, object] = {
         "mode": result.mode,
         "repo_path": result.repo_path,
         "markdown": result.markdown,
@@ -280,6 +315,13 @@ def _result_payload(result: AnalysisResult, saved: str | None = None) -> dict[st
             for call in result.tool_calls
         ],
     }
+    if result.token_usage:
+        payload["token_usage"] = {
+            "prompt_tokens": result.token_usage.prompt_tokens,
+            "completion_tokens": result.token_usage.completion_tokens,
+            "total_tokens": result.token_usage.total_tokens,
+        }
+    return payload
 
 
 def _format_exception(exc: BaseException) -> str:
@@ -302,7 +344,7 @@ def _authorize_repo_if_needed(repo_path: str, config_path: str | None) -> None:
         message = str(exc)
         if "readable_roots" not in message:
             raise
-        _message(message, "Permission", "yellow")
+        _message(message, "权限 / Permission", "yellow")
         if config_path:
             prompt = f"是否将该仓库的绝对路径加入配置文件 {config_path} 并继续？"
         else:
@@ -310,7 +352,7 @@ def _authorize_repo_if_needed(repo_path: str, config_path: str | None) -> None:
         if not typer.confirm(prompt, default=False):
             raise typer.Abort()
         selected = append_readable_root(config_path, repo_path)
-        _message(f"已更新配置：{selected}", "Config", "green")
+        _message(f"已更新配置：{selected}", TITLE_CONFIG, "green")
 
 
 def _print_progress(message: str) -> None:
@@ -320,7 +362,7 @@ def _print_progress(message: str) -> None:
 def _print_user_turn(text: str, config_path: str | Path | None = None) -> None:
     if not _show_user_turn(config_path):
         return
-    console.print(_panel(_console_safe(text), "You", "bright_black"))
+    console.print(_panel(_console_safe(text), TITLE_USER, "bright_black"))
 
 
 CHAT_COMMANDS = [
@@ -393,12 +435,12 @@ def _print_session_header(session: ChatSession) -> None:
     table = Table.grid(padding=(0, 1))
     table.add_column(style="dim", no_wrap=True)
     table.add_column()
-    table.add_row("Repo", _console_safe(_short_path(session.state.repo_path, 64)))
-    table.add_row("Model", _console_safe(config.llm.model or "<empty>"))
+    table.add_row("仓库 / Repo", _console_safe(_short_path(session.state.repo_path, 64)))
+    table.add_row("模型 / Model", _console_safe(config.llm.model or "<empty>"))
     table.add_row("MCP", f"{mcp.transport} / {len(mcp.tools)} tools")
-    table.add_row("Network", _status_label(mcp.network_enabled))
-    table.add_row("Offline", _status_label(session.offline))
-    console.print(_panel(table, "RepoPilot Chat", "cyan"))
+    table.add_row("联网 / Network", _status_label(mcp.network_enabled))
+    table.add_row("离线 / Offline", _status_label(session.offline))
+    console.print(_panel(table, TITLE_CHAT, "cyan"))
 
 
 def _print_banner(config_path: str | Path | None = None) -> None:
@@ -414,7 +456,7 @@ def _quick_actions_panel() -> Panel:
     table.add_row("/module-map", "模块地图")
     table.add_row("/task-brief <task>", "任务简报")
     table.add_row("/deep-scan", "完整入职包")
-    return _panel(table, "Quick Actions", "blue")
+    return _panel(table, TITLE_ACTIONS, "blue")
 
 
 def _input_rules_panel() -> Panel:
@@ -424,7 +466,12 @@ def _input_rules_panel() -> Panel:
             "直接输入自然语言即可追问；以 [cyan]/[/cyan] 开头的输入只按命令解析。",
         ]
     )
-    return _panel(body, "Input", "magenta")
+    return _panel(body, TITLE_INPUT, "magenta")
+
+
+def _about_panel() -> Panel:
+    body = Align.center(Text("lte_z · 小Z工作室#2026", style="#ffa500"))
+    return _panel(body, TITLE_ABOUT, "#ffa500")
 
 
 def _print_dashboard(session: ChatSession) -> None:
@@ -433,11 +480,12 @@ def _print_dashboard(session: ChatSession) -> None:
     if _is_compact(session.config_path):
         console.print(_quick_actions_panel())
         console.print(_input_rules_panel())
+        console.print(_about_panel())
         return
     grid = Table.grid(expand=True)
     grid.add_column(ratio=1)
     grid.add_column(ratio=1)
-    grid.add_row(_quick_actions_panel(), _input_rules_panel())
+    grid.add_row(_quick_actions_panel(), Group(_input_rules_panel(), _about_panel()))
     console.print(grid)
 
 
@@ -518,9 +566,11 @@ def _mcp_table(config_path: str | None = None) -> Table:
 
 def _artifact_panel_title(artifact) -> str:
     if artifact.mode == "chat":
-        return f"Answer / {artifact.title}"
+        if artifact.title == "对话":
+            return TITLE_ANSWER
+        return f"{TITLE_ANSWER} · {artifact.title}"
     label = MODE_LABELS.get(artifact.mode, artifact.mode)
-    return f"Report / {label}"
+    return f"{TITLE_REPORT} · {label}"
 
 
 def _print_artifact(artifact) -> None:
@@ -540,7 +590,7 @@ def _tools_table(session: ChatSession) -> Table:
 def _sources_table(session: ChatSession) -> Table | Panel:
     sources = session.get_sources()
     if not sources:
-        return _panel("暂无工具证据。", "Sources", "bright_black")
+        return _panel("暂无工具证据。", TITLE_SOURCES, "bright_black")
     table = _data_table()
     table.add_column("#", justify="right", style="dim", no_wrap=True)
     table.add_column("工具", style="cyan", no_wrap=True)
@@ -552,7 +602,7 @@ def _sources_table(session: ChatSession) -> Table | Panel:
 
 def _artifacts_table(session: ChatSession) -> Table | Panel:
     if not session.state.artifacts:
-        return _panel("暂无报告。", "Artifacts", "bright_black")
+        return _panel("暂无报告。", TITLE_ARTIFACTS, "bright_black")
     table = _data_table()
     table.add_column("ID", style="cyan", no_wrap=True)
     table.add_column("模式", no_wrap=True)
@@ -567,7 +617,7 @@ def _set_api_key_interactive() -> bool:
     ensure_local_settings()
     config = load_config()
     if not config.llm.provider or not config.llm.base_url or not config.llm.model:
-        _message("请先选择 LLM 供应商。", "Provider", "yellow")
+        _message("请先选择 LLM 供应商。", TITLE_PROVIDER, "yellow")
         if not _select_provider():
             return False
         config = load_config()
@@ -588,19 +638,19 @@ def _set_api_key_interactive() -> bool:
 def _handle_chat_command(session: ChatSession, command: str) -> bool:
     validation_error = validate_slash_command(command)
     if validation_error:
-        _message(validation_error, "Command", "yellow")
+        _message(validation_error, TITLE_COMMAND, "yellow")
         return True
     name, _, rest = command.partition(" ")
     if name in ("/exit", "/quit"):
         return False
     if name == "/help":
         group = rest.strip()
-        _print_table(_chat_help_for_group(group) if group else _chat_help_table(), "Help", "blue")
+        _print_table(_chat_help_for_group(group) if group else _chat_help_table(), TITLE_HELP, "blue")
     elif name == "/setup":
         config_path, env_path = ensure_local_settings()
-        _message(f"配置文件：{config_path}\n环境文件：{env_path}", "Setup", "green")
+        _message(f"配置文件：{config_path}\n环境文件：{env_path}", TITLE_SETUP, "green")
     elif name == "/config":
-        _print_table(_settings_table(session.config_path), "Settings", "blue")
+        _print_table(_settings_table(session.config_path), TITLE_SETTINGS, "blue")
     elif name == "/settings":
         _handle_settings_command(session.config_path, rest)
         session.config = load_config(session.config_path)
@@ -608,16 +658,16 @@ def _handle_chat_command(session: ChatSession, command: str) -> bool:
         changed = _select_provider()
         session.config = load_config(session.config_path)
         if changed:
-            _print_table(_settings_table(session.config_path), "Settings", "blue")
+            _print_table(_settings_table(session.config_path), TITLE_SETTINGS, "blue")
     elif name == "/api-key":
         changed = _set_api_key_interactive()
         session.config = load_config(session.config_path)
         if changed:
-            _print_table(_settings_table(session.config_path), "Settings", "blue")
+            _print_table(_settings_table(session.config_path), TITLE_SETTINGS, "blue")
     elif name == "/status":
         _print_session_header(session)
     elif name == "/task-brief":
-        _message("/task-brief 需要任务文本。", "Command", "yellow")
+        _message("/task-brief 需要任务文本。", TITLE_COMMAND, "yellow")
     elif name == "/mcp":
         action = rest.strip().lower()
         if action in ("on", "off"):
@@ -628,24 +678,24 @@ def _handle_chat_command(session: ChatSession, command: str) -> bool:
             _message("用法：/mcp、/mcp on 或 /mcp off。", "MCP", "yellow")
         _print_table(_mcp_table(session.config_path), "MCP", "blue")
     elif name == "/tools":
-        _print_table(_tools_table(session), "Tools", "blue")
+        _print_table(_tools_table(session), TITLE_TOOLS, "blue")
     elif name == "/sources":
         output = _sources_table(session)
-        console.print(output) if isinstance(output, Panel) else _print_table(output, "Sources", "blue")
+        console.print(output) if isinstance(output, Panel) else _print_table(output, TITLE_SOURCES, "blue")
     elif name == "/artifacts":
         output = _artifacts_table(session)
-        console.print(output) if isinstance(output, Panel) else _print_table(output, "Artifacts", "blue")
+        console.print(output) if isinstance(output, Panel) else _print_table(output, TITLE_ARTIFACTS, "blue")
     elif name == "/save":
-        _message(session.save_artifact(filename=rest.strip() or None), "Status", "green")
+        _message(session.save_artifact(filename=rest.strip() or None), TITLE_STATUS, "green")
     elif name == "/clear":
         if typer.confirm("确认清空当前会话上下文并清屏？", default=False):
             session.clear()
             _hard_clear()
             _print_dashboard(session)
         else:
-            _message("已取消，当前会话保持不变。", "Clear", "yellow")
+            _message("已取消，当前会话保持不变。", "清空 / Clear", "yellow")
     else:
-        _message(f"未知命令：{name}。输入 /help 查看命令。", "Command", "yellow")
+        _message(f"未知命令：{name}。输入 /help 查看命令。", TITLE_COMMAND, "yellow")
     return True
 
 
@@ -658,15 +708,16 @@ def _run_chat_action(
     events: list[str] = []
     start = time.perf_counter()
     status = "已完成"
+    artifact = None
 
     def progress(message: str) -> None:
         nonlocal latest
         latest = message
         events.append(message)
-        console.print(f"[magenta]Thinking[/magenta] [dim]{_console_safe(message)}[/dim]")
+        console.print(f"[magenta]运行中[/magenta] [dim]{_console_safe(message)}[/dim]")
 
     try:
-        console.print(_panel(label, "Thinking", "magenta"))
+        console.print(_panel(label, TITLE_THINKING, "magenta"))
         if _use_animation(config_path):
             with console.status(_console_safe(label), spinner="dots") as spinner:
 
@@ -684,12 +735,13 @@ def _run_chat_action(
         _print_artifact(artifact)
     except KeyboardInterrupt:
         status = "已中断"
-        _message("已尝试中断当前操作。你可以继续输入命令，或输入 /exit 退出。", "Interrupted", "yellow")
+        _message("已尝试中断当前操作。你可以继续输入命令，或输入 /exit 退出。", "中断 / Interrupted", "yellow")
     finally:
         if latest == label and status == "已完成":
             status = "未执行"
         tool_calls = sum(1 for event in events if event.startswith("调用工具："))
-        _turn_divider(status, time.perf_counter() - start, tool_calls)
+        token_usage = getattr(artifact, "token_usage", None)
+        _turn_divider(status, time.perf_counter() - start, tool_calls, token_usage)
 
 
 def _chat_loop(session: ChatSession) -> None:
@@ -708,7 +760,7 @@ def _chat_loop(session: ChatSession) -> None:
             if text.startswith("/"):
                 validation_error = validate_slash_command(text)
                 if validation_error:
-                    _message(validation_error, "Command", "yellow")
+                    _message(validation_error, TITLE_COMMAND, "yellow")
                     continue
                 name, _, rest = text.partition(" ")
                 if name == "/overview":
@@ -750,7 +802,7 @@ def _chat_loop(session: ChatSession) -> None:
                     session.config_path,
                 )
         except Exception as exc:
-            _message(_format_exception(exc), "Error", "red")
+            _message(_format_exception(exc), TITLE_ERROR, "red")
 
 
 def _start_chat(repo_path: str, config_path: str | None, offline: bool, *, clear_screen: bool = True) -> None:
@@ -768,15 +820,15 @@ def _guided_entry() -> None:
     config = load_config()
     offline = False
     if not config.llm.provider or not config.llm.base_url or not config.llm.model:
-        _message("尚未选择 LLM 供应商。", "Setup", "yellow")
+        _message("尚未选择 LLM 供应商。", TITLE_SETUP, "yellow")
         if typer.confirm("现在选择供应商并使用在线 Agent？", default=False):
             _select_provider()
             config = load_config()
         else:
             offline = True
-            _message("本次将使用离线模式，你仍然可以验证仓库工具链和报告保存。", "Offline", "yellow")
+            _message("本次将使用离线模式，你仍然可以验证仓库工具链和报告保存。", "离线 / Offline", "yellow")
     if not offline and not config.llm.api_key:
-        _message("尚未配置 LLM_API_KEY。", "Setup", "yellow")
+        _message("尚未配置 LLM_API_KEY。", TITLE_SETUP, "yellow")
         if typer.confirm("现在填写 API Key？", default=False):
             key = getpass("LLM API Key: ").strip()
             if key:
@@ -786,7 +838,7 @@ def _guided_entry() -> None:
                 offline = True
         else:
             offline = True
-            _message("本次将使用离线模式，你仍然可以验证仓库工具链和报告保存。", "Offline", "yellow")
+            _message("本次将使用离线模式，你仍然可以验证仓库工具链和报告保存。", "离线 / Offline", "yellow")
     default_repo = str(Path.cwd().resolve())
     repo_path = typer.prompt("选择要分析的仓库路径", default=default_repo)
     try:
@@ -868,22 +920,22 @@ def _settings_keys_table(config_path: str | None = None) -> Table:
 def _handle_settings_command(config_path: str | None, rest: str) -> None:
     parts = rest.strip().split(maxsplit=2)
     if not parts:
-        _print_table(_settings_keys_table(config_path), "Settings", "blue")
+        _print_table(_settings_keys_table(config_path), TITLE_SETTINGS, "blue")
         return
     action = parts[0]
     try:
         if action == "get" and len(parts) == 2:
-            _message(f"{parts[1]} = {_value_text(get_config_value(parts[1], config_path))}", "Settings", "cyan")
+            _message(f"{parts[1]} = {_value_text(get_config_value(parts[1], config_path))}", TITLE_SETTINGS, "cyan")
         elif action == "set" and len(parts) == 3:
             selected = set_config_value(parts[1], parts[2], config_path)
-            _message(f"已更新 {parts[1]}：{selected}", "Settings", "green")
+            _message(f"已更新 {parts[1]}：{selected}", TITLE_SETTINGS, "green")
         elif action == "reset" and len(parts) == 2:
             selected = reset_config_value(parts[1], config_path)
-            _message(f"已恢复 {parts[1]} 默认值：{selected}", "Settings", "green")
+            _message(f"已恢复 {parts[1]} 默认值：{selected}", TITLE_SETTINGS, "green")
         else:
-            _message("用法：/settings、/settings get <key>、/settings set <key> <value>、/settings reset <key>", "Settings", "yellow")
+            _message("用法：/settings、/settings get <key>、/settings set <key> <value>、/settings reset <key>", TITLE_SETTINGS, "yellow")
     except (KeyError, ValueError) as exc:
-        _message(str(exc), "Settings", "yellow")
+        _message(str(exc), TITLE_SETTINGS, "yellow")
 
 
 @app.command()
@@ -930,7 +982,7 @@ def setup(
     if not skip_api_key:
         key = api_key if api_key is not None else getpass("LLM API Key: ")
         update_env_value("LLM_API_KEY", key.strip())
-    _message(f"已初始化本地配置：{config_path}\n已初始化本地环境：{env_path}", "Setup", "green")
+    _message(f"已初始化本地配置：{config_path}\n已初始化本地环境：{env_path}", TITLE_SETUP, "green")
 
 
 @config_app.command("show")
@@ -938,7 +990,7 @@ def config_show() -> None:
     """显示当前本地配置摘要。"""
 
     ensure_local_settings()
-    _print_table(_settings_table(), "Settings", "blue")
+    _print_table(_settings_table(), TITLE_SETTINGS, "blue")
 
 
 @config_app.command("list")
@@ -946,7 +998,7 @@ def config_list(config: ConfigOption = None) -> None:
     """列出所有 YAML 配置项。"""
 
     ensure_local_settings()
-    _print_table(_settings_keys_table(config), "Settings", "blue")
+    _print_table(_settings_keys_table(config), TITLE_SETTINGS, "blue")
 
 
 @config_app.command("get")
@@ -954,7 +1006,7 @@ def config_get(key: str, config: ConfigOption = None) -> None:
     """读取单个 YAML 配置项。"""
 
     try:
-        _message(f"{key} = {_value_text(get_config_value(key, config))}", "Config", "cyan")
+        _message(f"{key} = {_value_text(get_config_value(key, config))}", TITLE_CONFIG, "cyan")
     except KeyError as exc:
         raise typer.ClickException(str(exc)) from exc
 
@@ -967,7 +1019,7 @@ def config_set(key: str, value: str, config: ConfigOption = None) -> None:
         selected = set_config_value(key, value, config)
     except (KeyError, ValueError) as exc:
         raise typer.ClickException(str(exc)) from exc
-    _message(f"已更新 {key}：{selected}", "Config", "green")
+    _message(f"已更新 {key}：{selected}", TITLE_CONFIG, "green")
 
 
 @config_app.command("reset")
@@ -978,7 +1030,7 @@ def config_reset(key: str, config: ConfigOption = None) -> None:
         selected = reset_config_value(key, config)
     except (KeyError, ValueError) as exc:
         raise typer.ClickException(str(exc)) from exc
-    _message(f"已恢复 {key} 默认值：{selected}", "Config", "green")
+    _message(f"已恢复 {key} 默认值：{selected}", TITLE_CONFIG, "green")
 
 
 @config_app.command("schema")
@@ -987,7 +1039,7 @@ def config_schema() -> None:
 
     import yaml
 
-    console.print(_panel(yaml.safe_dump(default_config_data(), allow_unicode=True, sort_keys=False), "Settings", "blue"))
+    console.print(_panel(yaml.safe_dump(default_config_data(), allow_unicode=True, sort_keys=False), TITLE_SETTINGS, "blue"))
 
 
 @config_app.command("doctor")
@@ -1008,11 +1060,11 @@ def config_doctor() -> None:
     table.add_row("readable_roots", str(health.readable_roots_count))
     table.add_row("MCP tools", "local stdio server")
     table.add_row("HTTP Fetch", "on" if config.network.allow_http_fetch else "off")
-    _print_table(table, "Doctor", "blue")
+    _print_table(table, "诊断 / Doctor", "blue")
     if not health.has_api_key:
-        _message("提示：运行 repopilot config set-api-key 后即可调用在线模型。", "Doctor", "yellow")
+        _message("提示：运行 repopilot config set-api-key 后即可调用在线模型。", "诊断 / Doctor", "yellow")
     if not config.llm.provider or not config.llm.model:
-        _message("提示：运行 repopilot config set-provider 选择供应商。", "Doctor", "yellow")
+        _message("提示：运行 repopilot config set-provider 选择供应商。", "诊断 / Doctor", "yellow")
 
 
 @config_app.command("add-root")
@@ -1020,7 +1072,7 @@ def config_add_root(path: str) -> None:
     """将仓库或父目录加入 readable_roots。"""
 
     selected = add_readable_root(path)
-    _message(f"已加入 readable_roots：{Path(path).expanduser().resolve()}\n配置文件：{selected}", "Config", "green")
+    _message(f"已加入 readable_roots：{Path(path).expanduser().resolve()}\n配置文件：{selected}", TITLE_CONFIG, "green")
 
 
 @config_app.command("remove-root")
@@ -1028,7 +1080,7 @@ def config_remove_root(path: str) -> None:
     """从 readable_roots 移除路径。"""
 
     selected = remove_readable_root(path)
-    _message(f"已移除 readable_roots：{Path(path).expanduser().resolve()}\n配置文件：{selected}", "Config", "green")
+    _message(f"已移除 readable_roots：{Path(path).expanduser().resolve()}\n配置文件：{selected}", TITLE_CONFIG, "green")
 
 
 @config_app.command("set-model")
@@ -1036,7 +1088,7 @@ def config_set_model(model: str) -> None:
     """设置模型名称。"""
 
     selected = update_env_value("LLM_MODEL", model)
-    _message(f"已设置模型：{model}\n环境文件：{selected}", "Config", "green")
+    _message(f"已设置模型：{model}\n环境文件：{selected}", TITLE_CONFIG, "green")
 
 
 @config_app.command("set-base-url")
@@ -1044,7 +1096,7 @@ def config_set_base_url(base_url: str) -> None:
     """设置 OpenAI-compatible Base URL。"""
 
     selected = update_env_value("LLM_BASE_URL", base_url)
-    _message(f"已设置 Base URL：{base_url}\n环境文件：{selected}", "Config", "green")
+    _message(f"已设置 Base URL：{base_url}\n环境文件：{selected}", TITLE_CONFIG, "green")
 
 
 @config_app.command("set-provider")
@@ -1064,7 +1116,7 @@ def config_set_api_key(
     ensure_local_settings()
     config = load_config()
     if not config.llm.provider or not config.llm.base_url or not config.llm.model:
-        _message("请先选择 LLM 供应商。", "Provider", "yellow")
+        _message("请先选择 LLM 供应商。", TITLE_PROVIDER, "yellow")
         if not _select_provider():
             return
         config = load_config()
@@ -1086,7 +1138,7 @@ def config_network_on() -> None:
     """开启 web_fetch_url MCP 工具。"""
 
     selected = set_network_enabled(True)
-    _message(f"已开启 HTTP Fetch：{selected}", "Network", "green")
+    _message(f"已开启 HTTP Fetch：{selected}", "网络 / Network", "green")
 
 
 @network_app.command("off")
@@ -1094,7 +1146,7 @@ def config_network_off() -> None:
     """关闭 web_fetch_url MCP 工具。"""
 
     selected = set_network_enabled(False)
-    _message(f"已关闭 HTTP Fetch：{selected}", "Network", "green")
+    _message(f"已关闭 HTTP Fetch：{selected}", "网络 / Network", "green")
 
 
 @app.command()
