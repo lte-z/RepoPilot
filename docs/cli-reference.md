@@ -6,7 +6,7 @@
 repopilot
 ```
 
-不带子命令时，RepoPilot 会进入引导式 CLI：初始化 `.repopilot/`、检查 LLM 配置、选择仓库路径，然后进入多轮会话。
+不带子命令时，RepoPilot 会进入引导式 CLI：初始化 RepoPilot home、检查 LLM 配置、选择仓库路径，然后进入多轮会话。
 
 启动界面包含仓库会话状态、快速动作、输入规则和 `关于 / About` 品牌信息。在线模型返回 token usage 时，每轮结束分隔符会显示本轮总 token；离线模式、中断、失败或服务商未返回 usage 时会显示 `token 未返回`，RepoPilot 不会本地估算 token。
 
@@ -40,7 +40,7 @@ repopilot web
 
 - `--config <path>`：指定 YAML 配置文件。
 - `--offline`：不调用 LLM，只使用本地工具生成摘要。
-- `--save`：保存 Markdown 报告到 `.repopilot/reports/`。
+- `--save`：保存 Markdown 报告到当前仓库的 RepoPilot profile reports。
 - `--json`：对一次性分析命令输出机器可读 JSON。
 
 `repopilot setup --provider <alias>` 可直接使用内置 Provider 预设；当前别名包括 `openai`、`gemini`、`deepseek`、`qwen`、`kimi`、`zhipu`、`openrouter`、`groq`、`siliconflow`。完整 Base URL 和默认模型见 [configuration.md](configuration.md)。
@@ -65,7 +65,7 @@ repopilot web
 | 配置 | `/settings [get\|set\|reset]` | 查看或修改 YAML 配置。 |
 | 配置 | `/provider` | 交互式选择 LLM 供应商、Base URL 和模型。 |
 | 配置 | `/api-key` | 交互式保存 API Key。 |
-| 会话 | `/setup` | 初始化 `.repopilot/` 本地配置。 |
+| 配置 | `/setup` | 初始化运行时配置。 |
 | 会话 | `/clear` | 清空当前会话上下文并清屏。 |
 | 会话 | `/exit` | 退出会话。 |
 

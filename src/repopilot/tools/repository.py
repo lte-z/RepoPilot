@@ -14,8 +14,9 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
-from repopilot.config import AppConfig, load_config
+from repopilot.config import AppConfig, load_config, with_report_dir
 from repopilot.permissions import PathGuard
+from repopilot.settings_store import ensure_repo_profile
 
 
 ResponseFormat = Literal["markdown", "json"]
@@ -62,7 +63,7 @@ class SymbolMapInput(RepoPathInput):
 
 
 class SaveReportInput(BaseModel):
-    filename: str = Field(description="Report filename under the configured reports directory.")
+    filename: str = Field(description="Report filename under the current allowed reports directory.")
     content: str = Field(description="Markdown report content.")
     response_format: ResponseFormat = "markdown"
 
@@ -759,9 +760,12 @@ def repo_git_summary(params: GitSummaryInput, config: AppConfig | None = None) -
 
 
 def repo_save_report(params: SaveReportInput, config: AppConfig | None = None) -> str:
-    """Save a Markdown report under the configured reports directory."""
+    """Save a Markdown report under the current allowed reports directory."""
 
     cfg = config or load_config()
+    if config is None and os.getenv("REPOPILOT_SESSION_REPO"):
+        profile = ensure_repo_profile(os.environ["REPOPILOT_SESSION_REPO"])
+        cfg = with_report_dir(cfg, profile.reports_dir)
     guard = PathGuard(cfg, cfg.project_root, validate_session=False)
     safe_name = re.sub(r"[^A-Za-z0-9._-]+", "-", Path(params.filename).name).strip("-")
     safe_name = safe_name or "repopilot-report.md"

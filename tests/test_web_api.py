@@ -2,7 +2,19 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
+import repopilot.settings_store as store
+
 from repopilot.web import app
+
+
+def _redirect_runtime_home(monkeypatch, home: Path) -> None:
+    monkeypatch.setattr(store, "PROJECT_ROOT", home)
+    monkeypatch.setattr(store, "STORE_DIR", home)
+    monkeypatch.setattr(store, "LOCAL_CONFIG_PATH", home / "config.yaml")
+    monkeypatch.setattr(store, "LOCAL_ENV_PATH", home / ".env")
+    monkeypatch.setattr(store, "REPORTS_DIR", home / "reports")
+    monkeypatch.setattr(store, "REPOS_DIR", home / "repos")
+    monkeypatch.setattr(store, "HOME_MARKER_PATH", home / "home.yaml")
 
 
 def test_web_api_analyze_offline_reuses_agent_core(tmp_path: Path, monkeypatch) -> None:
@@ -10,6 +22,7 @@ def test_web_api_analyze_offline_reuses_agent_core(tmp_path: Path, monkeypatch) 
     outputs = tmp_path / "outputs"
     repo.mkdir()
     outputs.mkdir()
+    _redirect_runtime_home(monkeypatch, tmp_path / "runtime-home")
     (repo / "pyproject.toml").write_text("[project]\nname = 'sample'\n", encoding="utf-8")
     config_path = tmp_path / "config.yaml"
     config_path.write_text(
@@ -52,7 +65,9 @@ limits:
         "repo_detect_stack",
         "repo_git_summary",
     ]
-    assert (outputs / "repo-overview.md").exists()
+    assert not (outputs / "repo-overview.md").exists()
+    reports = list((tmp_path / "runtime-home" / "repos").glob("*/reports/repo-overview.md"))
+    assert len(reports) == 1
 
     report = client.get("/api/reports/repo-overview.md")
     assert report.status_code == 200

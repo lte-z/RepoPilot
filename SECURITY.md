@@ -1,17 +1,17 @@
 # 安全说明
 
-RepoPilot 是只读优先的本地 Agent。它会读取用户授权的仓库内容，并把运行时配置、API Key 和报告保存在本地 `.repopilot/` 目录中。
+RepoPilot 是只读优先的本地 Agent。它会读取用户授权的仓库内容，并把运行时配置、API Key 和报告保存在 RepoPilot home 中。默认情况下，RepoPilot 不会向被分析仓库写入运行时配置。
 
 ## 敏感数据
 
 请不要提交或公开：
 
-- `.repopilot/`
+- RepoPilot home
 - `.env` 文件或 API Key
 - 包含私有仓库内容的报告
 - 本机绝对路径、内部服务地址或其他隐私信息
 
-`.gitignore` 已默认忽略 `.repopilot/`、虚拟环境、缓存和常见本地配置文件，但提交前仍应主动检查。
+`.gitignore` 已默认忽略虚拟环境、缓存和常见本地配置文件，但提交前仍应主动检查是否包含运行时目录、私有报告或敏感路径。
 
 ## 权限边界
 

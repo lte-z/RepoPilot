@@ -3,6 +3,56 @@ from pathlib import Path
 from repopilot.config import append_readable_root, load_config
 
 
+def test_explicit_relative_config_path_resolves_from_cwd(tmp_path: Path, monkeypatch) -> None:
+    work = tmp_path / "work"
+    runtime_home = tmp_path / "runtime-home"
+    work.mkdir()
+    runtime_home.mkdir()
+    config_path = work / "custom.yaml"
+    config_path.write_text(
+        """
+permissions:
+  readable_roots:
+    - .
+  writable_roots:
+    - ./outputs
+""",
+        encoding="utf-8",
+    )
+
+    monkeypatch.chdir(work)
+    monkeypatch.setenv("REPOPILOT_HOME", str(runtime_home))
+
+    config = load_config("custom.yaml")
+
+    assert config.config_path == config_path.resolve()
+    assert config.permissions.writable_roots == [str((work / "outputs").resolve())]
+
+
+def test_relative_repopilot_config_env_resolves_from_cwd(tmp_path: Path, monkeypatch) -> None:
+    work = tmp_path / "work"
+    work.mkdir()
+    config_path = work / "env-config.yaml"
+    config_path.write_text(
+        """
+permissions:
+  readable_roots:
+    - .
+  writable_roots:
+    - ./reports
+""",
+        encoding="utf-8",
+    )
+
+    monkeypatch.chdir(work)
+    monkeypatch.setenv("REPOPILOT_CONFIG", "env-config.yaml")
+
+    config = load_config()
+
+    assert config.config_path == config_path.resolve()
+    assert config.permissions.writable_roots == [str((work / "reports").resolve())]
+
+
 def test_relative_permission_paths_resolve_from_config_file(tmp_path: Path) -> None:
     config_path = tmp_path / "repopilot.yaml"
     config_path.write_text(
