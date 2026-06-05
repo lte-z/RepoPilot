@@ -1251,9 +1251,9 @@ def web(
     host: Annotated[str, typer.Option("--host", help="监听地址。")] = "127.0.0.1",
     port: Annotated[int, typer.Option("--port", help="监听端口。")] = 8765,
 ) -> None:
-    """启动实验性本地 WebUI。"""
+    """启动预览版本地 WebUI。"""
 
-    _message(f"RepoPilot experimental WebUI: http://{host}:{port}", "WebUI", "green")
+    _message(f"RepoPilot preview WebUI: http://{host}:{port}", "WebUI", "green")
     uvicorn.run("repopilot.web:app", host=host, port=port, reload=False)
 
 

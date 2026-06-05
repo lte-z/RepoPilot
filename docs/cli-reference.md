@@ -34,7 +34,7 @@ repopilot mcp [status|on|off]
 repopilot web
 ```
 
-`repopilot web` 启动实验性本地 WebUI，用于演示一次性分析、工具调用时间线和报告预览；完整多轮会话和配置管理以 CLI 为准。
+`repopilot web` 启动预览版本地 WebUI，用于快速查看一次性分析、工具调用时间线和报告预览；完整多轮会话和配置管理以 CLI 为准。
 
 通用选项：
 
@@ -161,4 +161,4 @@ repopilot deep-scan <repo_path> --json
 
 如果意图不清楚，RepoPilot 会提示你换成更明确的问题或使用 slash 命令。
 
-`--offline` 会跳过 LLM Intent Router 和普通聊天 LLM，仅使用本地规则与本地仓库工具。它主要用于开发测试、课堂演示兜底和无网络调试，不代表完整在线 Agent 体验。
+`--offline` 会跳过 LLM Intent Router 和普通聊天 LLM，仅使用本地规则与本地仓库工具。它主要用于开发测试、无网络调试和本地工具链检查，不代表完整在线 Agent 体验。

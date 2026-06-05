@@ -1,6 +1,6 @@
 # 贡献指南
 
-感谢你关注 RepoPilot。这个项目的目标是把“进入陌生代码仓库前的侦察工作”做成一个边界清晰、只读优先、可复用的 Agent。
+感谢你关注 RepoPilot。这个项目的目标是把“进入陌生代码仓库前的侦察工作”做成一个边界清晰、只读优先、可复用、可审计、可维护的 Agent。
 
 ## 开发环境
 
@@ -13,16 +13,52 @@ python -m pip install -e ".[dev]"
 python -m pytest tests
 ```
 
-运行时配置、API Key 和报告会保存在 `.repopilot/`，该目录已被 Git 忽略。
+运行时配置、API Key 和报告目前保存在 `.repopilot/`。该目录在 RepoPilot 仓库中已被 Git 忽略，但在分析其他仓库时仍应主动避免提交运行时数据。
 
-## 提交前检查
+## 分支策略
 
-提交前请至少确认：
+- `main` 是稳定分支，应始终保持 CI 通过，并尽量处于可发布状态。
+- 非平凡改动应先创建 issue，再从 `main` 创建聚焦分支开发。
+- 推荐分支命名：
+  - `fix/<short-topic>`：缺陷修复。
+  - `feat/<short-topic>`：新能力。
+  - `docs/<short-topic>`：文档和流程。
+  - `test/<short-topic>`：测试覆盖。
+  - `refactor/<short-topic>`：不改变行为的结构调整。
+- 拼写、链接、注释、轻量文档修正等 trivial change 可以直接提交到 `main`，但仍应保持提交内容聚焦。
 
-- `python -m pytest tests` 通过。
+## Issue 策略
+
+除 trivial change 外，建议先创建 issue。一个好的 issue 应说明：
+
+- 当前问题或目标用户流程。
+- 期望行为。
+- 影响范围，包括 CLI、MCP 工具、配置、文档、测试和安全边界。
+- 验收标准。
+- 是否存在迁移或兼容性影响。
+
+维护者可以 self-assign issue，并在 PR 中使用 `Closes #<issue-number>` 关联。
+
+## Pull Request 策略
+
+PR 应保持聚焦，避免把无关重构、格式化和功能改动混在一起。提交 PR 前请确认：
+
+- 已关联 issue，或说明这是 trivial change。
+- `python -m pytest tests` 通过，或说明未运行原因。
 - `git diff --check` 通过。
+- 文档、CLI 帮助、配置参考和测试已随行为变化同步更新。
 - 没有提交 `.repopilot/`、`.env`、API Key、私有仓库报告或本机绝对路径。
 - 没有把被分析仓库中的私有代码复制进 issue、PR 或测试样例。
+
+涉及 CLI 输出、终端 UI 或 WebUI 的改动，请附上简短截图或文字示例。
+
+## Release 策略
+
+- 版本号遵循 SemVer 风格：`MAJOR.MINOR.PATCH`。
+- `0.1.x` 阶段允许较小破坏性调整，但必须在 README、CHANGELOG 或迁移说明中写清楚。
+- tag 视为不可变发布点。除非出现严重发布事故，已推送 tag 不应撤销或重打。
+- 发布前应确认 `main` 上 CI 通过、工作区干净、CHANGELOG 已更新。
+- Release notes 应按 issue/PR 整理用户可理解的变化，而不是简单复制 commit 列表。
 
 ## 修改 MCP 工具
 
@@ -35,7 +71,7 @@ python -m pytest tests
 - README 和 `docs/configuration.md`
 - 相关测试
 
-工具默认应保持只读，写入能力只允许写到配置的报告目录。
+工具默认应保持只读，写入能力只允许写到 RepoPilot 自己的运行时目录或报告目录。
 
 ## 修改配置项
 
@@ -47,8 +83,4 @@ python -m pytest tests
 - CLI 的 `/settings` 和 `repopilot config` 行为
 - 测试中的最小配置样例
 
-配置项应尽量有明确默认值，并避免要求用户手动编辑文件才能完成常见操作。
-
-## Pull Request
-
-PR 请保持聚焦，说明改动目的、运行过的测试以及可能影响的命令或配置项。涉及 CLI 输出的改动，请附上简短截图或文字示例。
+配置项应尽量有明确默认值，并避免要求用户手动编辑文件才能完成常见操作。涉及 API Key、路径授权、联网能力或写入目录的改动，应额外说明安全影响。
