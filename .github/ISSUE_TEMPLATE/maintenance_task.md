@@ -1,5 +1,5 @@
 ---
-name: Maintenance task
+name: 维护任务
 about: 跟踪文档、CI、重构、发布流程或仓库治理任务
 title: "[Maintenance] "
 labels: maintenance

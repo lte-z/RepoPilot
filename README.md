@@ -253,6 +253,7 @@ LLM 供应商、Base URL、模型和 API Key 由 `repopilot` 引导式入口、`
 
 ```bash
 pytest
+python -m build
 python -m repopilot.mcp_server
 ```
 

@@ -32,5 +32,29 @@ jobs:
       - name: Run tests
         run: python -m pytest tests
 
+      - name: Build package
+        run: python -m build
+
+      - name: Check wheel package data
+        shell: python
+        run: |
+          from pathlib import Path
+          import zipfile
+
+          wheels = sorted(Path("dist").glob("*.whl"))
+          if not wheels:
+              raise SystemExit("No wheel generated.")
+
+          required = {
+              "repopilot/prompts/chat_prompt.md",
+              "repopilot/prompts/intent_prompt.md",
+              "repopilot/prompts/system_prompt.md",
+          }
+          with zipfile.ZipFile(wheels[-1]) as wheel:
+              names = set(wheel.namelist())
+          missing = sorted(required - names)
+          if missing:
+              raise SystemExit(f"Missing package data: {missing}")
+
       - name: Check patch whitespace
         run: git diff --check

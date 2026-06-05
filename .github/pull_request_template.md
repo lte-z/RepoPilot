@@ -1,50 +1,51 @@
-## Summary
+## 变更概述
 
 -
 
-## Linked Issue
+## 关联 Issue
 
 Closes #
 
-## Change Type
+## 变更类型
 
-- [ ] Bug fix
-- [ ] Feature
-- [ ] Documentation
-- [ ] Test
-- [ ] Refactor
-- [ ] Maintenance
+- [ ] Bug 修复
+- [ ] 新功能
+- [ ] 文档
+- [ ] 测试
+- [ ] 重构
+- [ ] 维护
 
-## Scope
+## 影响范围
 
 - [ ] CLI
-- [ ] MCP tools
-- [ ] Agent orchestration
-- [ ] Configuration / permissions
-- [ ] Documentation
+- [ ] MCP 工具
+- [ ] Agent 编排
+- [ ] 配置 / 权限
+- [ ] 文档
 - [ ] WebUI
-- [ ] CI / packaging
+- [ ] CI / 打包
 
-## Testing
+## 测试
 
 - [ ] `python -m pytest tests`
+- [ ] `python -m build`
 - [ ] `git diff --check`
-- [ ] Manual CLI check, if user-facing output changed
-- [ ] Not run; reason:
+- [ ] 如用户可见输出有变化，已手动检查 CLI
+- [ ] 未运行；原因：
 
-## Documentation
+## 文档
 
-- [ ] README updated or not needed
-- [ ] `docs/` updated or not needed
-- [ ] CLI help / examples updated or not needed
-- [ ] CHANGELOG updated or not needed
+- [ ] README 已更新或无需更新
+- [ ] `docs/` 已更新或无需更新
+- [ ] CLI help / examples 已更新或无需更新
+- [ ] CHANGELOG 已更新或无需更新
 
-## Security And Privacy
+## 安全与隐私
 
-- [ ] No API keys, `.env` contents, local `.repopilot/` data, private repository code, or personal paths included.
-- [ ] Permission, storage, or network behavior changes are explained above.
-- [ ] Migration or cleanup impact is documented, if applicable.
+- [ ] 未包含 API Key、`.env` 内容、本地 `.repopilot/` 数据、私有仓库代码或个人路径。
+- [ ] 如涉及权限、存储或联网行为变化，已在上文说明。
+- [ ] 如涉及迁移或清理影响，已同步记录。
 
-## Screenshots Or Output
+## 截图或输出
 
-Paste a short CLI/WebUI example when the visible behavior changes.
+如果可见行为发生变化，请粘贴简短的 CLI/WebUI 示例。

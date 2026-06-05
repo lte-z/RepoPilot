@@ -1,5 +1,5 @@
 ---
-name: Bug report
+name: Bug 报告
 about: 报告一个可复现的 RepoPilot 问题
 title: "[Bug] "
 labels: bug
