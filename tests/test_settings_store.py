@@ -8,25 +8,28 @@ import repopilot.settings_store as store
 
 def _redirect_store(monkeypatch, tmp_path: Path) -> None:
     root = tmp_path / "project"
-    local = root / ".repopilot"
+    local = tmp_path / "runtime-home"
     root.mkdir()
-    monkeypatch.setattr(store, "PROJECT_ROOT", root)
+    monkeypatch.setattr(store, "PROJECT_ROOT", local)
     monkeypatch.setattr(store, "STORE_DIR", local)
     monkeypatch.setattr(store, "LOCAL_CONFIG_PATH", local / "config.yaml")
     monkeypatch.setattr(store, "LOCAL_ENV_PATH", local / ".env")
     monkeypatch.setattr(store, "REPORTS_DIR", local / "reports")
+    monkeypatch.setattr(store, "REPOS_DIR", local / "repos")
+    monkeypatch.setattr(store, "HOME_MARKER_PATH", local / "home.yaml")
 
 
-def test_ensure_local_settings_creates_ignored_runtime_store(tmp_path: Path, monkeypatch) -> None:
+def test_ensure_local_settings_creates_runtime_home(tmp_path: Path, monkeypatch) -> None:
     _redirect_store(monkeypatch, tmp_path)
 
     config_path, env_path = store.ensure_local_settings()
 
-    assert config_path == tmp_path / "project" / ".repopilot" / "config.yaml"
-    assert env_path == tmp_path / "project" / ".repopilot" / ".env"
-    assert (tmp_path / "project" / ".repopilot" / "reports").is_dir()
-    assert not (tmp_path / "project" / ".repopilot" / "sessions").exists()
-    assert not (tmp_path / "project" / ".repopilot" / "cache").exists()
+    assert config_path == tmp_path / "runtime-home" / "config.yaml"
+    assert env_path == tmp_path / "runtime-home" / ".env"
+    assert not (tmp_path / "runtime-home" / "reports").exists()
+    assert (tmp_path / "runtime-home" / "repos").is_dir()
+    assert (tmp_path / "runtime-home" / "home.yaml").exists()
+    assert not (tmp_path / "project" / ".repopilot").exists()
     assert "LLM_API_KEY=" in env_path.read_text(encoding="utf-8")
     data = store.load_yaml_document(config_path)
     assert data["intent"]["use_llm_router"] is True
@@ -38,6 +41,26 @@ def test_ensure_local_settings_creates_ignored_runtime_store(tmp_path: Path, mon
     assert "**/build/**" in data["permissions"]["fallback_ignore_patterns"]
     assert "deep-scan" in data["modes"]
     assert "repo_symbol_map" in data["modes"]["module-map"]["enabled_tools"]
+
+
+def test_repo_profile_is_stored_under_runtime_home(tmp_path: Path, monkeypatch) -> None:
+    _redirect_store(monkeypatch, tmp_path)
+    first = tmp_path / "workspace-a" / "demo"
+    second = tmp_path / "workspace-b" / "demo"
+    first.mkdir(parents=True)
+    second.mkdir(parents=True)
+
+    first_profile = store.ensure_repo_profile(first)
+    second_profile = store.ensure_repo_profile(second)
+
+    assert first_profile.repo_id != second_profile.repo_id
+    assert first_profile.profile_dir.parent == tmp_path / "runtime-home" / "repos"
+    assert first_profile.reports_dir.is_dir()
+    assert first_profile.profile_path.exists()
+    data = store.load_yaml_document(first_profile.profile_path)
+    assert data["repo_path"] == str(first.resolve())
+    assert data["reports_dir"] == str(first_profile.reports_dir)
+    assert not (first / ".repopilot").exists()
 
 
 def test_add_and_remove_readable_root_resolves_relative_roots_from_store(tmp_path: Path, monkeypatch) -> None:
@@ -78,8 +101,9 @@ def test_set_and_get_intent_config_value(tmp_path: Path, monkeypatch) -> None:
     assert store.get_config_value("intent.min_confidence") == 0.7
 
 
-def test_setup_uses_current_working_directory_for_runtime_store(tmp_path: Path) -> None:
+def test_setup_uses_repopilot_home_without_polluting_cwd(tmp_path: Path) -> None:
     project = tmp_path / "relocated-project"
+    home = tmp_path / "runtime-home"
     project.mkdir()
     src_root = Path(__file__).resolve().parents[1] / "src"
 
@@ -91,11 +115,13 @@ def test_setup_uses_current_working_directory_for_runtime_store(tmp_path: Path) 
             "print(ensure_local_settings()[0])",
         ],
         cwd=project,
-        env={**os.environ, "PYTHONPATH": str(src_root)},
+        env={**os.environ, "PYTHONPATH": str(src_root), "REPOPILOT_HOME": str(home)},
         capture_output=True,
         text=True,
         check=True,
     )
 
-    assert str(project / ".repopilot" / "config.yaml") in result.stdout
-    assert (project / ".repopilot" / "config.yaml").exists()
+    assert str(home / "config.yaml") in result.stdout
+    assert (home / "config.yaml").exists()
+    assert (home / ".env").exists()
+    assert not (project / ".repopilot").exists()

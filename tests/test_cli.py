@@ -8,8 +8,9 @@ import yaml
 from typer.testing import CliRunner
 
 import repopilot.cli as cli
+import repopilot.settings_store as store
 from repopilot.cli import app
-from repopilot.agent import TokenUsage
+from repopilot.agent import AnalysisResult, TokenUsage
 from repopilot.config import AppConfig, LLMSettings
 from repopilot.session import Artifact
 
@@ -17,14 +18,27 @@ from repopilot.session import Artifact
 runner = CliRunner()
 
 
-def _subprocess_env(src_root: Path) -> dict[str, str]:
+def _subprocess_env(src_root: Path, repopilot_home: Path | None = None) -> dict[str, str]:
     # Windows CI may capture child process output through a non-UTF-8 locale.
-    return {
+    env = {
         **os.environ,
         "PYTHONPATH": str(src_root),
         "PYTHONUTF8": "1",
         "PYTHONIOENCODING": "utf-8",
     }
+    if repopilot_home is not None:
+        env["REPOPILOT_HOME"] = str(repopilot_home)
+    return env
+
+
+def _redirect_runtime_home(monkeypatch, home: Path) -> None:
+    monkeypatch.setattr(store, "PROJECT_ROOT", home)
+    monkeypatch.setattr(store, "STORE_DIR", home)
+    monkeypatch.setattr(store, "LOCAL_CONFIG_PATH", home / "config.yaml")
+    monkeypatch.setattr(store, "LOCAL_ENV_PATH", home / ".env")
+    monkeypatch.setattr(store, "REPORTS_DIR", home / "reports")
+    monkeypatch.setattr(store, "REPOS_DIR", home / "repos")
+    monkeypatch.setattr(store, "HOME_MARKER_PATH", home / "home.yaml")
 
 
 def _write_config(tmp_path: Path) -> Path:
@@ -345,42 +359,64 @@ def test_provider_presets_cover_common_openai_compatible_services() -> None:
     assert cli.PROVIDER_PRESETS["qwen"][1] == "https://dashscope.aliyuncs.com/compatible-mode/v1"
 
 
-def test_cli_setup_uses_invocation_cwd_for_runtime_store(tmp_path: Path) -> None:
+def test_cli_setup_uses_repopilot_home_without_polluting_cwd(tmp_path: Path) -> None:
     project = tmp_path / "relocated-project"
+    home = tmp_path / "runtime-home"
     project.mkdir()
     src_root = Path(__file__).resolve().parents[1] / "src"
 
     result = subprocess.run(
         [sys.executable, "-m", "repopilot.cli", "setup", "--skip-api-key"],
         cwd=project,
-        env=_subprocess_env(src_root),
+        env=_subprocess_env(src_root, home),
         capture_output=True,
         text=True,
         encoding="utf-8",
         check=True,
     )
 
-    assert ".repopilot" in result.stdout
-    assert (project / ".repopilot" / "config.yaml").exists()
-    assert (project / ".repopilot" / ".env").exists()
+    assert (home / "config.yaml").exists()
+    assert (home / ".env").exists()
+    assert not (home / "reports").exists()
+    assert not (project / ".repopilot").exists()
 
 
 def test_cli_setup_can_use_provider_preset(tmp_path: Path) -> None:
     project = tmp_path / "provider-project"
+    home = tmp_path / "runtime-home"
     project.mkdir()
     src_root = Path(__file__).resolve().parents[1] / "src"
 
     subprocess.run(
         [sys.executable, "-m", "repopilot.cli", "setup", "--skip-api-key", "--provider", "gemini"],
         cwd=project,
-        env=_subprocess_env(src_root),
+        env=_subprocess_env(src_root, home),
         capture_output=True,
         text=True,
         encoding="utf-8",
         check=True,
     )
 
-    env_text = (project / ".repopilot" / ".env").read_text(encoding="utf-8")
+    env_text = (home / ".env").read_text(encoding="utf-8")
     assert "LLM_PROVIDER=Google Gemini" in env_text
     assert "LLM_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai/" in env_text
     assert "LLM_MODEL=gemini-2.5-flash" in env_text
+    assert not (project / ".repopilot").exists()
+
+
+def test_cli_save_uses_repo_profile_even_with_custom_config(tmp_path: Path, monkeypatch) -> None:
+    repo = tmp_path / "repo"
+    outputs = tmp_path / "outputs"
+    runtime_home = tmp_path / "runtime-home"
+    repo.mkdir()
+    _redirect_runtime_home(monkeypatch, runtime_home)
+    config_path = _write_config(tmp_path)
+    result = AnalysisResult(mode="overview", repo_path=str(repo), markdown="## 结论\n\nOK")
+
+    saved = cli._save_if_needed(result, save=True, config_path=str(config_path))
+
+    assert saved is not None
+    assert not (outputs / "repo-overview.md").exists()
+    reports = list((runtime_home / "repos").glob("*/reports/repo-overview.md"))
+    assert len(reports) == 1
+    assert "## 结论" in reports[0].read_text(encoding="utf-8")

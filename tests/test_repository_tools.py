@@ -2,6 +2,7 @@ import json
 import subprocess
 from pathlib import Path
 
+import repopilot.settings_store as store
 from repopilot.config import AppConfig, LimitSettings, PermissionSettings
 from repopilot.tools.repository import (
     DetectStackInput,
@@ -39,6 +40,16 @@ def make_config(root: Path, out: Path) -> AppConfig:
         limits=LimitSettings(max_file_chars=8, max_search_results=2, max_tree_entries=20),
         project_root=root,
     )
+
+
+def redirect_store(monkeypatch, home: Path) -> None:
+    monkeypatch.setattr(store, "PROJECT_ROOT", home)
+    monkeypatch.setattr(store, "STORE_DIR", home)
+    monkeypatch.setattr(store, "LOCAL_CONFIG_PATH", home / "config.yaml")
+    monkeypatch.setattr(store, "LOCAL_ENV_PATH", home / ".env")
+    monkeypatch.setattr(store, "REPORTS_DIR", home / "reports")
+    monkeypatch.setattr(store, "REPOS_DIR", home / "repos")
+    monkeypatch.setattr(store, "HOME_MARKER_PATH", home / "home.yaml")
 
 
 def test_read_file_truncates_text(tmp_path: Path) -> None:
@@ -252,7 +263,6 @@ int add(int left, int right) {
     assert any(file["path"] == "app.py" for file in data["files"])
 
 
-
 def test_search_text_limits_results(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -274,6 +284,21 @@ def test_save_report_writes_only_outputs(tmp_path: Path) -> None:
     assert (out / "report.md").exists()
     assert "报告已保存" in result
 
+
+def test_save_report_uses_session_repo_profile_by_default(tmp_path: Path, monkeypatch) -> None:
+    repo = tmp_path / "repo"
+    home = tmp_path / "runtime-home"
+    repo.mkdir()
+    redirect_store(monkeypatch, home)
+    monkeypatch.setenv("REPOPILOT_SESSION_REPO", str(repo))
+
+    result = repo_save_report(SaveReportInput(filename="report.md", content="# ok"))
+
+    reports = list((home / "repos").glob("*/reports/report.md"))
+    assert len(reports) == 1
+    assert reports[0].read_text(encoding="utf-8") == "# ok\n"
+    assert "报告已保存" in result
+    assert not (repo / ".repopilot").exists()
 
 def test_save_report_does_not_require_project_root_read_access(tmp_path: Path) -> None:
     readable = tmp_path / "repos"

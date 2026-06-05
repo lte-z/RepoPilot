@@ -9,11 +9,12 @@ from pathlib import Path
 from typing import Callable, Literal, cast
 
 from .agent import AnalysisResult, Mode, TokenUsage, run_analysis, run_plain_chat
-from .config import load_config
+from .config import load_config, with_report_dir
 from .intent import IntentDecision
 from .intent_agent import run_intent_router
 from .permissions import PathGuard
 from .tools.repository import SaveReportInput, repo_save_report
+from .settings_store import ensure_repo_profile
 
 
 Role = Literal["user", "assistant", "system"]
@@ -223,7 +224,7 @@ class ChatSession:
             [
                 "## 配置入口",
                 "",
-                "当前会话可以通过命令修改本地 `.repopilot/` 配置，不需要手动编辑文件。",
+                "当前会话可以通过命令修改 RepoPilot home 配置，不需要手动编辑文件。",
                 "",
                 "### 常用命令",
                 "",
@@ -359,7 +360,9 @@ class ChatSession:
             raise ValueError(f"未找到 artifact：{artifact_id}")
         safe_name = filename or f"{Path(self.state.repo_path).name}-{artifact.mode}-{artifact.id}.md"
         content = _normalize_report_markdown(artifact.title, artifact.markdown)
-        text = repo_save_report(SaveReportInput(filename=safe_name, content=content), load_config(self.config_path))
+        profile = ensure_repo_profile(self.state.repo_path)
+        config = with_report_dir(load_config(self.config_path), profile.reports_dir)
+        text = repo_save_report(SaveReportInput(filename=safe_name, content=content), config)
         artifact.saved_path = text
         return text
 

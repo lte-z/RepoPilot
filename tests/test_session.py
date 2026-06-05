@@ -1,8 +1,19 @@
 from pathlib import Path
 
 from repopilot.intent import IntentDecision
+import repopilot.settings_store as store
 import repopilot.session as session_module
 from repopilot.session import ChatSession, _normalize_report_markdown
+
+
+def _redirect_runtime_home(monkeypatch, home: Path) -> None:
+    monkeypatch.setattr(store, "PROJECT_ROOT", home)
+    monkeypatch.setattr(store, "STORE_DIR", home)
+    monkeypatch.setattr(store, "LOCAL_CONFIG_PATH", home / "config.yaml")
+    monkeypatch.setattr(store, "LOCAL_ENV_PATH", home / ".env")
+    monkeypatch.setattr(store, "REPORTS_DIR", home / "reports")
+    monkeypatch.setattr(store, "REPOS_DIR", home / "repos")
+    monkeypatch.setattr(store, "HOME_MARKER_PATH", home / "home.yaml")
 
 
 def _write_config(tmp_path: Path) -> Path:
@@ -54,11 +65,12 @@ def test_chat_session_runs_quick_action_and_tracks_artifacts(tmp_path: Path) -> 
     ]
 
 
-def test_chat_session_follow_up_uses_context_and_can_save(tmp_path: Path) -> None:
+def test_chat_session_follow_up_uses_context_and_can_save(tmp_path: Path, monkeypatch) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
     (repo / "auth.py").write_text("def login_flow():\n    return True\n", encoding="utf-8")
     config_path = _write_config(tmp_path)
+    _redirect_runtime_home(monkeypatch, tmp_path / "runtime-home")
 
     session = ChatSession(str(repo), config_path=config_path, offline=True)
     session.run_quick_action("overview")
@@ -68,7 +80,8 @@ def test_chat_session_follow_up_uses_context_and_can_save(tmp_path: Path) -> Non
     assert follow_up.mode == "task-brief"
     assert "任务相关搜索" in follow_up.markdown
     assert "报告已保存" in saved
-    assert any((tmp_path / "outputs").glob("repo-task-brief-*.md"))
+    assert not any((tmp_path / "outputs").glob("repo-task-brief-*.md"))
+    assert any((tmp_path / "runtime-home" / "repos").glob("*/reports/repo-task-brief-*.md"))
 
 
 def test_saved_chat_report_is_normalized_as_standalone_markdown() -> None:

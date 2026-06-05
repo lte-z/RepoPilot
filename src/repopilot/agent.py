@@ -137,12 +137,14 @@ def _tool_result_text(result: Any) -> str:
     return "\n".join(chunks) if chunks else str(result)
 
 
-def _mcp_server_environment(config: AppConfig) -> dict[str, str]:
+def _mcp_server_environment(config: AppConfig, repo_path: str | Path | None = None) -> dict[str, str]:
     """Build the environment inherited by the local MCP subprocess."""
 
     env = os.environ.copy()
     env["REPOPILOT_CONFIG"] = str(config.config_path)
-    env["REPOPILOT_PROJECT_ROOT"] = str(config.project_root)
+    env["REPOPILOT_HOME"] = str(config.project_root)
+    if repo_path is not None:
+        env["REPOPILOT_SESSION_REPO"] = str(Path(repo_path).expanduser().resolve())
     return env
 
 
@@ -323,7 +325,7 @@ async def analyze_repository(
     server = StdioServerParameters(
         command=sys.executable,
         args=["-m", "repopilot.mcp_server"],
-        env=_mcp_server_environment(config),
+        env=_mcp_server_environment(config, guard.session_repo),
         cwd=str(config.project_root),
     )
     selected_model = _mode_model(config, selected_mode)

@@ -11,11 +11,11 @@ from pydantic import BaseModel, Field
 
 from .settings_store import (
     LOCAL_CONFIG_PATH,
-    LOCAL_ENV_PATH,
     PROJECT_ROOT,
     DEFAULT_FALLBACK_IGNORE_PATTERNS,
     ensure_local_settings,
     read_env_file,
+    runtime_paths,
 )
 
 DEFAULT_CONFIG_PATH = LOCAL_CONFIG_PATH
@@ -126,18 +126,18 @@ def _resolve_permission_paths(data: dict[str, Any], base_dir: Path) -> dict[str,
 
 
 def _select_config_path(config_path: str | Path | None = None) -> Path:
-    selected_value = config_path or os.getenv("REPOPILOT_CONFIG")
+    selected_value = config_path if config_path is not None else os.getenv("REPOPILOT_CONFIG")
     if selected_value:
         selected = Path(selected_value).expanduser()
-    else:
-        selected, _ = ensure_local_settings()
-    if not selected.is_absolute():
-        selected = (PROJECT_ROOT / selected).resolve()
-    return selected
+        if not selected.is_absolute():
+            selected = (Path.cwd() / selected).resolve()
+        return selected
+    selected, _ = ensure_local_settings()
+    return selected.resolve()
 
 
 def _load_llm_settings() -> LLMSettings:
-    values = read_env_file(LOCAL_ENV_PATH)
+    values = read_env_file(runtime_paths().env_path)
 
     def pick(key: str, default: str = "") -> str:
         return values.get(key) or os.getenv(key, default)
@@ -160,7 +160,15 @@ def load_config(config_path: str | Path | None = None) -> AppConfig:
     data.pop("config_path", None)
     data.pop("project_root", None)
     llm = _load_llm_settings()
-    return AppConfig(**data, llm=llm, config_path=selected.resolve())
+    return AppConfig(**data, llm=llm, config_path=selected.resolve(), project_root=runtime_paths().home)
+
+
+def with_report_dir(config: AppConfig, reports_dir: str | Path) -> AppConfig:
+    """Return a config copy whose write boundary is a specific reports directory."""
+
+    resolved = Path(reports_dir).expanduser().resolve()
+    permissions = config.permissions.model_copy(update={"writable_roots": [str(resolved)]})
+    return config.model_copy(update={"permissions": permissions, "project_root": resolved})
 
 
 def append_readable_root(config_path: str | Path | None, root: str | Path) -> Path:

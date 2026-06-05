@@ -21,7 +21,7 @@ from rich.text import Text
 
 from . import __version__
 from .agent import AnalysisResult, run_analysis
-from .config import append_readable_root, load_config
+from .config import append_readable_root, load_config, with_report_dir
 from .intent import validate_slash_command
 from .permissions import PathGuard, PermissionErrorDetail
 from .session import ChatSession
@@ -39,6 +39,7 @@ from .settings_store import (
     set_config_value,
     update_env_value,
     default_config_data,
+    ensure_repo_profile,
 )
 from .tools.repository import SaveReportInput, repo_save_report
 
@@ -306,7 +307,9 @@ def _save_if_needed(result: AnalysisResult, save: bool, config_path: str | None)
     if not save:
         return None
     filename = f"{Path(result.repo_path).name}-{result.mode}.md"
-    text = repo_save_report(SaveReportInput(filename=filename, content=result.markdown), load_config(config_path))
+    profile = ensure_repo_profile(result.repo_path)
+    config = with_report_dir(load_config(config_path), profile.reports_dir)
+    text = repo_save_report(SaveReportInput(filename=filename, content=result.markdown), config)
     _message(text, TITLE_STATUS, "green")
     return text
 
@@ -361,11 +364,12 @@ def _authorize_repo_if_needed(repo_path: str, config_path: str | None) -> None:
         if config_path:
             prompt = f"是否将该仓库的绝对路径加入配置文件 {config_path} 并继续？"
         else:
-            prompt = "是否将该仓库的绝对路径加入 .repopilot/config.yaml 并继续？"
+            prompt = "是否将该仓库的绝对路径加入 RepoPilot home 配置并继续？"
         if not typer.confirm(prompt, default=False):
             raise typer.Abort()
         selected = append_readable_root(config_path, repo_path)
         _message(f"已更新配置：{selected}", TITLE_CONFIG, "green")
+    ensure_repo_profile(repo_path)
 
 
 def _print_progress(message: str) -> None:
@@ -395,7 +399,7 @@ CHAT_COMMANDS = [
     ("配置", "/settings [get|set|reset]", "查看或修改 YAML 配置"),
     ("配置", "/provider", "更改 LLM 供应商"),
     ("配置", "/api-key", "更改 LLM API Key"),
-    ("会话", "/setup", "初始化 .repopilot/"),
+    ("配置", "/setup", "初始化运行时配置"),
     ("会话", "/clear", "清空当前会话"),
     ("会话", "/exit", "退出"),
 ]
@@ -435,7 +439,11 @@ def _run(
         saved = None
         if save:
             filename = f"{Path(result.repo_path).name}-{result.mode}.md"
-            saved = repo_save_report(SaveReportInput(filename=filename, content=result.markdown), load_config(config))
+            report_config = load_config(config)
+            if config is None:
+                profile = ensure_repo_profile(result.repo_path)
+                report_config = with_report_dir(report_config, profile.reports_dir)
+            saved = repo_save_report(SaveReportInput(filename=filename, content=result.markdown), report_config)
         console.print_json(json.dumps(_result_payload(result, saved), ensure_ascii=False))
         return
     _show_result(result)
@@ -531,6 +539,7 @@ def _chat_help_for_group(group: str) -> Table:
             ("/settings set <key> <value>", "修改配置项"),
             ("/settings reset <key>", "恢复默认值"),
             ("/provider / /api-key", "修改 LLM 连接信息"),
+            ("/setup", "初始化运行时配置"),
         ],
         "mcp": [
             ("/mcp", "显示 MCP 工具状态"),
@@ -541,7 +550,7 @@ def _chat_help_for_group(group: str) -> Table:
         "reports": [
             ("/artifacts", "列出会话报告"),
             ("/sources", "列出工具证据摘要"),
-            ("/save [name]", "保存最近报告到 .repopilot/reports/"),
+            ("/save [name]", "保存最近报告到当前仓库 profile reports"),
         ],
     }
     table = _data_table()
@@ -871,7 +880,7 @@ def _guided_entry() -> None:
 
 ConfigOption = Annotated[str | None, typer.Option("--config", help="配置文件路径。")]
 OfflineOption = Annotated[bool, typer.Option("--offline", help="使用离线工具摘要模式，不调用 LLM。")]
-SaveOption = Annotated[bool, typer.Option("--save", help="保存 Markdown 报告到 .repopilot/reports/。")]
+SaveOption = Annotated[bool, typer.Option("--save", help="保存 Markdown 报告到当前仓库 profile reports。")]
 JsonOption = Annotated[bool, typer.Option("--json", help="输出机器可读 JSON，不显示 Rich 表格。")]
 
 
@@ -985,7 +994,7 @@ def setup(
     model: Annotated[str | None, typer.Option("--model", help="模型名称。")] = None,
     skip_api_key: Annotated[bool, typer.Option("--skip-api-key", help="只初始化配置文件，不填写 API Key。")] = False,
 ) -> None:
-    """初始化项目内 .repopilot/ 本地配置。"""
+    """初始化运行时配置。"""
 
     config_path, env_path = ensure_local_settings()
     if provider in PROVIDER_PRESETS and not base_url and not model:
@@ -1072,8 +1081,8 @@ def config_doctor() -> None:
     table = _data_table()
     table.add_column("检查项")
     table.add_column("状态")
-    table.add_row(".repopilot/config.yaml", "ok" if health.config_exists else "missing")
-    table.add_row(".repopilot/.env", "ok" if health.env_exists else "missing")
+    table.add_row("config.yaml", "ok" if health.config_exists else "missing")
+    table.add_row(".env", "ok" if health.env_exists else "missing")
     table.add_row("LLM_PROVIDER", config.llm.provider or "missing")
     table.add_row("LLM_API_KEY", "ok" if health.has_api_key else "missing")
     table.add_row("LLM_MODEL", config.llm.model or "missing")

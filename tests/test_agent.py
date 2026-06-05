@@ -107,13 +107,17 @@ def test_http_fetch_is_hidden_when_network_is_disabled() -> None:
 def test_mcp_server_environment_inherits_selected_config(tmp_path: Path) -> None:
     config_path = tmp_path / "custom.yaml"
     project_root = tmp_path / "project"
+    repo_path = tmp_path / "repo"
     project_root.mkdir()
+    repo_path.mkdir()
     config = AppConfig(config_path=config_path, project_root=project_root)
 
-    env = _mcp_server_environment(config)
+    env = _mcp_server_environment(config, repo_path)
 
     assert env["REPOPILOT_CONFIG"] == str(config_path)
-    assert env["REPOPILOT_PROJECT_ROOT"] == str(project_root)
+    assert env["REPOPILOT_HOME"] == str(project_root)
+    assert env["REPOPILOT_SESSION_REPO"] == str(repo_path.resolve())
+    assert "REPOPILOT_PROJECT_ROOT" not in env
 
 
 def test_token_usage_merges_response_usage() -> None:

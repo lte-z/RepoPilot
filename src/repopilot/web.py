@@ -10,7 +10,8 @@ from fastapi.responses import HTMLResponse, PlainTextResponse
 from pydantic import BaseModel
 
 from .agent import Mode, analyze_repository
-from .config import load_config
+from .config import load_config, with_report_dir
+from .settings_store import ensure_repo_profile, runtime_paths
 from .permissions import PathGuard
 from .tools.repository import SaveReportInput, repo_save_report
 
@@ -122,7 +123,9 @@ async def api_analyze(request: AnalyzeRequest) -> dict[str, Any]:
         saved = None
         if request.save:
             filename = f"{Path(result.repo_path).name}-{result.mode}.md"
-            saved = repo_save_report(SaveReportInput(filename=filename, content=result.markdown))
+            profile = ensure_repo_profile(result.repo_path)
+            config = with_report_dir(load_config(), profile.reports_dir)
+            saved = repo_save_report(SaveReportInput(filename=filename, content=result.markdown), config)
         return {
             "mode": result.mode,
             "repo_path": result.repo_path,
@@ -143,9 +146,17 @@ async def api_recent_repos() -> dict[str, Any]:
 
 @app.get("/api/reports/{name}", response_class=PlainTextResponse)
 async def api_report(name: str) -> str:
+    safe_name = Path(name).name
+    repos_dir = runtime_paths().repos_dir
+    if repos_dir.exists():
+        for reports_dir in sorted(repos_dir.glob("*/reports")):
+            path = reports_dir / safe_name
+            if path.is_file():
+                return path.read_text(encoding="utf-8")
+
     config = load_config()
     guard = PathGuard(config, config.project_root, validate_session=False)
-    path = guard.resolve_write_path(Path(name).name)
+    path = guard.resolve_write_path(safe_name)
     if not path.exists():
         raise HTTPException(status_code=404, detail="报告不存在")
     return path.read_text(encoding="utf-8")

@@ -1,8 +1,12 @@
-"""Local project settings store for RepoPilot."""
+"""Runtime settings store for RepoPilot."""
 
 from __future__ import annotations
 
+import hashlib
 import os
+import platform
+import re
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -10,11 +14,40 @@ from typing import Any
 import yaml
 
 
-PROJECT_ROOT = Path(os.getenv("REPOPILOT_PROJECT_ROOT", Path.cwd())).expanduser().resolve()
-STORE_DIR = PROJECT_ROOT / ".repopilot"
+HOME_ENV = "REPOPILOT_HOME"
+LEGACY_PROJECT_ROOT_ENV = "REPOPILOT_PROJECT_ROOT"
+
+
+def _platform_default_home() -> Path:
+    system = platform.system().lower()
+    if system == "windows":
+        base = os.getenv("APPDATA") or os.getenv("LOCALAPPDATA")
+        if base:
+            return Path(base) / "RepoPilot"
+        return Path.home() / "AppData" / "Roaming" / "RepoPilot"
+    if system == "darwin":
+        return Path.home() / "Library" / "Application Support" / "RepoPilot"
+    base = os.getenv("XDG_CONFIG_HOME")
+    return (Path(base) if base else Path.home() / ".config") / "repopilot"
+
+
+def _resolve_runtime_home() -> Path:
+    explicit = os.getenv(HOME_ENV)
+    if explicit:
+        return Path(explicit).expanduser().resolve()
+    legacy = os.getenv(LEGACY_PROJECT_ROOT_ENV)
+    if legacy:
+        return (Path(legacy).expanduser().resolve() / ".repopilot")
+    return _platform_default_home().expanduser().resolve()
+
+
+PROJECT_ROOT = _resolve_runtime_home()
+STORE_DIR = PROJECT_ROOT
 LOCAL_CONFIG_PATH = STORE_DIR / "config.yaml"
 LOCAL_ENV_PATH = STORE_DIR / ".env"
 REPORTS_DIR = STORE_DIR / "reports"
+REPOS_DIR = STORE_DIR / "repos"
+HOME_MARKER_PATH = STORE_DIR / "home.yaml"
 
 DEFAULT_FALLBACK_IGNORE_PATTERNS = [
     "**/.next/**",
@@ -40,6 +73,25 @@ DEFAULT_FALLBACK_IGNORE_PATTERNS = [
 
 
 @dataclass(frozen=True)
+class RuntimePaths:
+    home: Path
+    config_path: Path
+    env_path: Path
+    reports_dir: Path
+    repos_dir: Path
+    marker_path: Path
+
+
+@dataclass(frozen=True)
+class RepoProfile:
+    repo_id: str
+    repo_path: Path
+    profile_dir: Path
+    profile_path: Path
+    reports_dir: Path
+
+
+@dataclass(frozen=True)
 class SettingsHealth:
     store_dir: Path
     config_path: Path
@@ -51,12 +103,30 @@ class SettingsHealth:
     reports_dir: Path
 
 
-def ensure_store() -> Path:
-    """Create the ignored local settings directories."""
+def runtime_paths() -> RuntimePaths:
+    return RuntimePaths(
+        home=STORE_DIR,
+        config_path=LOCAL_CONFIG_PATH,
+        env_path=LOCAL_ENV_PATH,
+        reports_dir=REPORTS_DIR,
+        repos_dir=REPOS_DIR,
+        marker_path=HOME_MARKER_PATH,
+    )
 
-    for path in (STORE_DIR, REPORTS_DIR):
+
+def _home_marker_data() -> dict[str, Any]:
+    return {"kind": "repopilot-home", "version": 1}
+
+
+def ensure_store() -> Path:
+    """Create the RepoPilot runtime home directories."""
+
+    paths = runtime_paths()
+    for path in (paths.home, paths.repos_dir):
         path.mkdir(parents=True, exist_ok=True)
-    return STORE_DIR
+    if not paths.marker_path.exists():
+        _write_yaml(paths.marker_path, _home_marker_data())
+    return paths.home
 
 
 def _read_yaml(path: Path) -> dict[str, Any]:
@@ -72,13 +142,13 @@ def _write_yaml(path: Path, data: dict[str, Any]) -> None:
 
 
 def default_config_data() -> dict[str, Any]:
-    """Return a fresh local config document."""
+    """Return a fresh runtime config document."""
 
     return {
         "permissions": {
             "allow_all_roots": False,
             "respect_git_ignore": True,
-            "readable_roots": [".."],
+            "readable_roots": [str(Path.cwd().resolve())],
             "writable_roots": ["./reports"],
             "deny_patterns": ["**/.env", "**/.env.*", "**/.git/**", "**/.venv/**"],
             "fallback_ignore_patterns": list(DEFAULT_FALLBACK_IGNORE_PATTERNS),
@@ -185,19 +255,59 @@ def default_env_data() -> dict[str, str]:
 
 
 def ensure_local_settings() -> tuple[Path, Path]:
-    """Create local ignored config and env files if they do not exist."""
+    """Create RepoPilot home config and env files if they do not exist."""
 
+    paths = runtime_paths()
     ensure_store()
-    if not LOCAL_CONFIG_PATH.exists():
-        data = default_config_data()
-        permissions = data.setdefault("permissions", {})
-        if isinstance(permissions, dict):
-            permissions["readable_roots"] = permissions.get("readable_roots") or [".."]
-            permissions["writable_roots"] = ["./reports"]
-        _write_yaml(LOCAL_CONFIG_PATH, data)
-    if not LOCAL_ENV_PATH.exists():
-        write_env_file(LOCAL_ENV_PATH, default_env_data())
-    return LOCAL_CONFIG_PATH, LOCAL_ENV_PATH
+    if not paths.config_path.exists():
+        _write_yaml(paths.config_path, default_config_data())
+    if not paths.env_path.exists():
+        write_env_file(paths.env_path, default_env_data())
+    return paths.config_path, paths.env_path
+
+
+def _safe_repo_name(repo_path: Path) -> str:
+    name = re.sub(r"[^A-Za-z0-9._-]+", "-", repo_path.name).strip("-")
+    return name or "repo"
+
+
+def repo_profile_id(repo_path: str | Path) -> str:
+    resolved = Path(repo_path).expanduser().resolve()
+    digest = hashlib.sha256(str(resolved).encode("utf-8")).hexdigest()[:12]
+    return f"{_safe_repo_name(resolved)}-{digest}"
+
+
+def repo_profile(repo_path: str | Path) -> RepoProfile:
+    resolved = Path(repo_path).expanduser().resolve()
+    repo_id = repo_profile_id(resolved)
+    profile_dir = runtime_paths().repos_dir / repo_id
+    return RepoProfile(
+        repo_id=repo_id,
+        repo_path=resolved,
+        profile_dir=profile_dir,
+        profile_path=profile_dir / "profile.yaml",
+        reports_dir=profile_dir / "reports",
+    )
+
+
+def ensure_repo_profile(repo_path: str | Path) -> RepoProfile:
+    profile = repo_profile(repo_path)
+    now = time.time()
+    profile.reports_dir.mkdir(parents=True, exist_ok=True)
+    data: dict[str, Any]
+    if profile.profile_path.exists():
+        data = _read_yaml(profile.profile_path)
+        data["last_used_at"] = now
+    else:
+        data = {
+            "repo_id": profile.repo_id,
+            "repo_path": str(profile.repo_path),
+            "reports_dir": str(profile.reports_dir),
+            "created_at": now,
+            "last_used_at": now,
+        }
+    _write_yaml(profile.profile_path, data)
+    return profile
 
 
 def load_yaml_document(path: Path) -> dict[str, Any]:
@@ -232,27 +342,29 @@ def write_env_file(path: Path, values: dict[str, str]) -> None:
 
 def update_env_value(key: str, value: str) -> Path:
     ensure_local_settings()
-    values = {**default_env_data(), **read_env_file(LOCAL_ENV_PATH)}
+    paths = runtime_paths()
+    values = {**default_env_data(), **read_env_file(paths.env_path)}
     values[key] = value
-    write_env_file(LOCAL_ENV_PATH, values)
-    return LOCAL_ENV_PATH
+    write_env_file(paths.env_path, values)
+    return paths.env_path
 
 
 def local_config_data() -> dict[str, Any]:
     ensure_local_settings()
-    return _read_yaml(LOCAL_CONFIG_PATH)
+    return _read_yaml(runtime_paths().config_path)
 
 
 def save_local_config_data(data: dict[str, Any]) -> Path:
+    paths = runtime_paths()
     ensure_store()
-    _write_yaml(LOCAL_CONFIG_PATH, data)
-    return LOCAL_CONFIG_PATH
+    _write_yaml(paths.config_path, data)
+    return paths.config_path
 
 
 def select_config_document(config_path: str | Path | None = None) -> tuple[Path, dict[str, Any]]:
     if config_path is None:
         ensure_local_settings()
-        selected = LOCAL_CONFIG_PATH
+        selected = runtime_paths().config_path
     else:
         selected = Path(config_path).expanduser().resolve()
     return selected, _read_yaml(selected)
@@ -367,16 +479,18 @@ def _path_list(data: dict[str, Any], key: str) -> list[Any]:
     return values
 
 
+def _resolve_config_relative(value: Any) -> str:
+    path = Path(str(value)).expanduser()
+    if path.is_absolute():
+        return str(path.resolve())
+    return str((runtime_paths().config_path.parent / path).resolve())
+
+
 def add_readable_root(root: str | Path) -> Path:
     data = local_config_data()
     roots = _path_list(data, "readable_roots")
     absolute = str(Path(root).expanduser().resolve())
-    existing = {
-        str((LOCAL_CONFIG_PATH.parent / str(item)).expanduser().resolve())
-        if not Path(str(item)).expanduser().is_absolute()
-        else str(Path(str(item)).expanduser().resolve())
-        for item in roots
-    }
+    existing = {_resolve_config_relative(item) for item in roots}
     if absolute not in existing:
         roots.append(absolute)
     return save_local_config_data(data)
@@ -386,23 +500,14 @@ def remove_readable_root(root: str | Path) -> Path:
     data = local_config_data()
     roots = _path_list(data, "readable_roots")
     absolute = str(Path(root).expanduser().resolve())
-    roots[:] = [
-        item
-        for item in roots
-        if (
-            str((LOCAL_CONFIG_PATH.parent / str(item)).expanduser().resolve())
-            if not Path(str(item)).expanduser().is_absolute()
-            else str(Path(str(item)).expanduser().resolve())
-        )
-        != absolute
-    ]
+    roots[:] = [item for item in roots if _resolve_config_relative(item) != absolute]
     return save_local_config_data(data)
 
 
 def set_network_enabled(enabled: bool, config_path: str | Path | None = None) -> Path:
     if config_path is None:
         data = local_config_data()
-        selected = LOCAL_CONFIG_PATH
+        selected = runtime_paths().config_path
     else:
         selected = Path(config_path).expanduser().resolve()
         data = _read_yaml(selected)
@@ -415,9 +520,10 @@ def set_network_enabled(enabled: bool, config_path: str | Path | None = None) ->
 
 
 def settings_health(config_path: Path | None = None) -> SettingsHealth:
+    paths = runtime_paths()
     ensure_store()
-    selected_config = config_path or LOCAL_CONFIG_PATH
-    env_values = read_env_file(LOCAL_ENV_PATH)
+    selected_config = config_path or paths.config_path
+    env_values = read_env_file(paths.env_path)
     readable_roots_count = 0
     if selected_config.exists():
         data = _read_yaml(selected_config)
@@ -425,12 +531,12 @@ def settings_health(config_path: Path | None = None) -> SettingsHealth:
         if isinstance(permissions, dict) and isinstance(permissions.get("readable_roots"), list):
             readable_roots_count = len(permissions["readable_roots"])
     return SettingsHealth(
-        store_dir=STORE_DIR,
+        store_dir=paths.home,
         config_path=selected_config,
-        env_path=LOCAL_ENV_PATH,
+        env_path=paths.env_path,
         config_exists=selected_config.exists(),
-        env_exists=LOCAL_ENV_PATH.exists(),
+        env_exists=paths.env_path.exists(),
         has_api_key=bool(env_values.get("LLM_API_KEY")),
         readable_roots_count=readable_roots_count,
-        reports_dir=REPORTS_DIR,
+        reports_dir=paths.reports_dir,
     )
