@@ -9,7 +9,9 @@ from typer.testing import CliRunner
 
 import repopilot.cli as cli
 from repopilot.cli import app
+from repopilot.agent import TokenUsage
 from repopilot.config import AppConfig, LLMSettings
+from repopilot.session import Artifact
 
 
 runner = CliRunner()
@@ -250,6 +252,66 @@ def test_cli_chat_clear_requires_confirmation_and_reprints_dashboard(tmp_path: P
     assert result.exit_code == 0
     assert "确认清空当前会话上下文并清屏" in result.stdout
     assert "快速动作 / Actions" in result.stdout
+
+
+def test_run_chat_action_shows_returned_token_usage(capsys) -> None:
+    def action(progress):
+        progress("调用工具：repo_list_tree")
+        return Artifact(
+            id="a1",
+            title="对话",
+            mode="chat",
+            markdown="完成。",
+            token_usage=TokenUsage(total_tokens=1234),
+        )
+
+    assert cli._run_chat_action("测试 token。", action) is True
+
+    output = capsys.readouterr().out
+    assert "已完成" in output
+    assert "工具调用 1" in output
+    assert "1,234 tokens" in output
+    assert "token 未返回" not in output
+
+
+def test_run_chat_action_marks_missing_token_usage(capsys) -> None:
+    def action(progress):
+        progress("调用工具：repo_list_tree")
+        return Artifact(id="a1", title="对话", mode="chat", markdown="完成。")
+
+    assert cli._run_chat_action("测试缺失 token。", action) is True
+
+    output = capsys.readouterr().out
+    assert "已完成" in output
+    assert "工具调用 1" in output
+    assert "token 未返回" in output
+
+
+def test_run_chat_action_marks_interrupted_turn(capsys) -> None:
+    def action(progress):
+        progress("调用工具：repo_list_tree")
+        raise KeyboardInterrupt
+
+    assert cli._run_chat_action("测试中断。", action) is False
+
+    output = capsys.readouterr().out
+    assert "已中断" in output
+    assert "工具调用 1" in output
+    assert "token 未返回" in output
+
+
+def test_run_chat_action_marks_failed_turn(capsys) -> None:
+    def action(progress):
+        progress("调用工具：repo_list_tree")
+        raise RuntimeError("boom")
+
+    assert cli._run_chat_action("测试失败。", action) is False
+
+    output = capsys.readouterr().out
+    assert "失败" in output
+    assert "boom" in output
+    assert "工具调用 1" in output
+    assert "token 未返回" in output
 
 
 def test_cli_default_entry_guides_user_into_chat(tmp_path: Path, monkeypatch) -> None:
