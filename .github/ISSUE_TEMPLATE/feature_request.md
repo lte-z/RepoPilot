@@ -1,5 +1,5 @@
 ---
-name: Feature request
+name: 功能建议
 about: 提议一个 RepoPilot 能力或体验改进
 title: "[Feature] "
 labels: enhancement
