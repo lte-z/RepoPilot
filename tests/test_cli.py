@@ -420,3 +420,68 @@ def test_cli_save_uses_repo_profile_even_with_custom_config(tmp_path: Path, monk
     reports = list((runtime_home / "repos").glob("*/reports/repo-overview.md"))
     assert len(reports) == 1
     assert "## 结论" in reports[0].read_text(encoding="utf-8")
+
+
+def test_cli_config_home_shows_runtime_summary(tmp_path: Path, monkeypatch) -> None:
+    runtime_home = tmp_path / "runtime-home"
+    _redirect_runtime_home(monkeypatch, runtime_home)
+    store.ensure_local_settings()
+
+    result = runner.invoke(app, ["config", "home"])
+
+    assert result.exit_code == 0
+    assert "RepoPilot home" in result.stdout
+    assert "home marker" in result.stdout
+    assert "repo profiles" in result.stdout
+
+
+def test_cli_config_clean_dry_run_keeps_home(tmp_path: Path, monkeypatch) -> None:
+    runtime_home = tmp_path / "runtime-home"
+    _redirect_runtime_home(monkeypatch, runtime_home)
+    store.ensure_local_settings()
+
+    result = runner.invoke(app, ["config", "clean", "--dry-run"])
+
+    assert result.exit_code == 0
+    assert "dry-run" in result.stdout
+    assert runtime_home.exists()
+
+
+def test_cli_config_clean_requires_confirmation(tmp_path: Path, monkeypatch) -> None:
+    runtime_home = tmp_path / "runtime-home"
+    _redirect_runtime_home(monkeypatch, runtime_home)
+    store.ensure_local_settings()
+
+    result = runner.invoke(app, ["config", "clean"], input="n\n")
+
+    assert result.exit_code == 0
+    assert "已取消" in result.stdout
+    assert runtime_home.exists()
+
+
+def test_cli_config_clean_yes_deletes_home(tmp_path: Path, monkeypatch) -> None:
+    runtime_home = tmp_path / "runtime-home"
+    _redirect_runtime_home(monkeypatch, runtime_home)
+    store.ensure_local_settings()
+
+    result = runner.invoke(app, ["config", "clean", "--yes"])
+
+    assert result.exit_code == 0
+    assert "已清理" in result.stdout
+    assert not runtime_home.exists()
+
+
+def test_cli_config_clean_reports_delete_failure(tmp_path: Path, monkeypatch) -> None:
+    runtime_home = tmp_path / "runtime-home"
+    _redirect_runtime_home(monkeypatch, runtime_home)
+    store.ensure_local_settings()
+
+    def fail_delete(dry_run: bool = False):
+        raise OSError("permission denied")
+
+    monkeypatch.setattr(cli, "clean_runtime_home", fail_delete)
+    result = runner.invoke(app, ["config", "clean", "--yes"])
+
+    assert result.exit_code != 0
+    assert "permission denied" in str(result.exception)
+    assert runtime_home.exists()

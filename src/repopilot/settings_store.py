@@ -6,6 +6,7 @@ import hashlib
 import os
 import platform
 import re
+import shutil
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -31,14 +32,18 @@ def _platform_default_home() -> Path:
     return (Path(base) if base else Path.home() / ".config") / "repopilot"
 
 
+def _absolute_without_resolving_symlinks(path: str | Path) -> Path:
+    return Path(os.path.abspath(Path(path).expanduser()))
+
+
 def _resolve_runtime_home() -> Path:
     explicit = os.getenv(HOME_ENV)
     if explicit:
-        return Path(explicit).expanduser().resolve()
+        return _absolute_without_resolving_symlinks(explicit)
     legacy = os.getenv(LEGACY_PROJECT_ROOT_ENV)
     if legacy:
-        return (Path(legacy).expanduser().resolve() / ".repopilot")
-    return _platform_default_home().expanduser().resolve()
+        return _absolute_without_resolving_symlinks(Path(legacy).expanduser() / ".repopilot")
+    return _absolute_without_resolving_symlinks(_platform_default_home())
 
 
 PROJECT_ROOT = _resolve_runtime_home()
@@ -101,6 +106,33 @@ class SettingsHealth:
     has_api_key: bool
     readable_roots_count: int
     reports_dir: Path
+
+
+@dataclass(frozen=True)
+class RuntimeHomeSummary:
+    home: Path
+    exists: bool
+    marker_path: Path
+    marker_exists: bool
+    marker_valid: bool
+    config_path: Path
+    env_path: Path
+    config_exists: bool
+    env_exists: bool
+    repos_dir: Path
+    repo_profiles_count: int
+    report_dirs_count: int
+    report_files_count: int
+    total_files_count: int
+
+
+@dataclass(frozen=True)
+class RuntimeCleanPlan:
+    home: Path
+    exists: bool
+    can_clean: bool
+    reason: str
+    entries: list[Path]
 
 
 def runtime_paths() -> RuntimePaths:
@@ -517,6 +549,111 @@ def set_network_enabled(enabled: bool, config_path: str | Path | None = None) ->
     network["allow_http_fetch"] = enabled
     _write_yaml(selected, data)
     return selected
+
+
+def _marker_is_valid(path: Path) -> bool:
+    if not path.exists() or path.is_symlink() or not path.is_file():
+        return False
+    try:
+        data = _read_yaml(path)
+    except (OSError, ValueError, yaml.YAMLError):
+        return False
+    expected = _home_marker_data()
+    return data.get("kind") == expected["kind"] and data.get("version") == expected["version"]
+
+
+def _count_runtime_files(path: Path) -> int:
+    if not path.exists():
+        return 0
+    if path.is_file():
+        return 1
+    count = 0
+    for _, _, files in os.walk(path, followlinks=False):
+        count += len(files)
+    return count
+
+
+def runtime_home_summary() -> RuntimeHomeSummary:
+    """Return a read-only summary of the current RepoPilot home."""
+
+    paths = runtime_paths()
+    repo_profiles_count = 0
+    report_dirs_count = 0
+    report_files_count = 0
+    if paths.repos_dir.is_dir() and not paths.repos_dir.is_symlink():
+        repo_profiles_count = sum(1 for item in paths.repos_dir.glob("*/profile.yaml") if item.is_file())
+        report_dirs = [item for item in paths.repos_dir.glob("*/reports") if item.is_dir() and not item.is_symlink()]
+        report_dirs_count = len(report_dirs)
+        report_files_count = sum(_count_runtime_files(report_dir) for report_dir in report_dirs)
+    if paths.reports_dir.is_dir() and not paths.reports_dir.is_symlink():
+        report_dirs_count += 1
+        report_files_count += _count_runtime_files(paths.reports_dir)
+    return RuntimeHomeSummary(
+        home=paths.home,
+        exists=paths.home.exists(),
+        marker_path=paths.marker_path,
+        marker_exists=paths.marker_path.exists(),
+        marker_valid=_marker_is_valid(paths.marker_path),
+        config_path=paths.config_path,
+        env_path=paths.env_path,
+        config_exists=paths.config_path.exists(),
+        env_exists=paths.env_path.exists(),
+        repos_dir=paths.repos_dir,
+        repo_profiles_count=repo_profiles_count,
+        report_dirs_count=report_dirs_count,
+        report_files_count=report_files_count,
+        total_files_count=_count_runtime_files(paths.home),
+    )
+
+
+def _is_dangerous_cleanup_target(path: Path) -> bool:
+    resolved = _absolute_without_resolving_symlinks(path)
+    if resolved.parent == resolved:
+        return True
+    try:
+        if resolved == _absolute_without_resolving_symlinks(Path.home()):
+            return True
+    except RuntimeError:
+        pass
+    return len(resolved.parts) <= 1
+
+
+def runtime_clean_plan() -> RuntimeCleanPlan:
+    """Validate and describe the cleanup target without deleting anything."""
+
+    paths = runtime_paths()
+    home = _absolute_without_resolving_symlinks(paths.home)
+    marker_path = home / "home.yaml"
+    if home.is_symlink():
+        return RuntimeCleanPlan(home=home, exists=True, can_clean=False, reason="RepoPilot home 是符号链接，拒绝自动删除。", entries=[])
+    if _is_dangerous_cleanup_target(home):
+        return RuntimeCleanPlan(home=home, exists=home.exists(), can_clean=False, reason="拒绝清理危险路径。", entries=[])
+    if not home.exists():
+        return RuntimeCleanPlan(home=home, exists=False, can_clean=True, reason="RepoPilot home 不存在，无需清理。", entries=[])
+    if not home.is_dir():
+        return RuntimeCleanPlan(home=home, exists=True, can_clean=False, reason="RepoPilot home 不是目录。", entries=[])
+    if not _marker_is_valid(marker_path):
+        return RuntimeCleanPlan(
+            home=home,
+            exists=True,
+            can_clean=False,
+            reason="缺少合法 RepoPilot home marker，拒绝自动删除。",
+            entries=[],
+        )
+    entries = sorted(home.iterdir(), key=lambda item: item.name.lower())
+    return RuntimeCleanPlan(home=home, exists=True, can_clean=True, reason="将删除整个 RepoPilot home。", entries=entries)
+
+
+def clean_runtime_home(dry_run: bool = False) -> RuntimeCleanPlan:
+    """Delete the current RepoPilot home after marker-based validation."""
+
+    plan = runtime_clean_plan()
+    if dry_run or not plan.exists:
+        return plan
+    if not plan.can_clean:
+        raise ValueError(plan.reason)
+    shutil.rmtree(plan.home)
+    return plan
 
 
 def settings_health(config_path: Path | None = None) -> SettingsHealth:

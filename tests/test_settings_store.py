@@ -3,6 +3,8 @@ import os
 import subprocess
 import sys
 
+import pytest
+
 import repopilot.settings_store as store
 
 
@@ -17,6 +19,13 @@ def _redirect_store(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(store, "REPORTS_DIR", local / "reports")
     monkeypatch.setattr(store, "REPOS_DIR", local / "repos")
     monkeypatch.setattr(store, "HOME_MARKER_PATH", local / "home.yaml")
+
+
+def _make_dir_symlink(link: Path, target: Path) -> None:
+    try:
+        link.symlink_to(target, target_is_directory=True)
+    except (NotImplementedError, OSError) as exc:
+        pytest.skip(f"directory symlink unavailable: {exc}")
 
 
 def test_ensure_local_settings_creates_runtime_home(tmp_path: Path, monkeypatch) -> None:
@@ -125,3 +134,146 @@ def test_setup_uses_repopilot_home_without_polluting_cwd(tmp_path: Path) -> None
     assert (home / "config.yaml").exists()
     assert (home / ".env").exists()
     assert not (project / ".repopilot").exists()
+
+
+def test_runtime_home_summary_counts_profiles_and_reports(tmp_path: Path, monkeypatch) -> None:
+    _redirect_store(monkeypatch, tmp_path)
+    repo = tmp_path / "project" / "demo"
+    repo.mkdir(parents=True)
+
+    store.ensure_local_settings()
+    profile = store.ensure_repo_profile(repo)
+    (profile.reports_dir / "overview.md").write_text("# Report\n", encoding="utf-8")
+    summary = store.runtime_home_summary()
+
+    assert summary.exists is True
+    assert summary.marker_valid is True
+    assert summary.config_exists is True
+    assert summary.env_exists is True
+    assert summary.repo_profiles_count == 1
+    assert summary.report_dirs_count == 1
+    assert summary.report_files_count == 1
+
+
+def test_clean_runtime_home_dry_run_does_not_delete(tmp_path: Path, monkeypatch) -> None:
+    _redirect_store(monkeypatch, tmp_path)
+    store.ensure_local_settings()
+
+    plan = store.clean_runtime_home(dry_run=True)
+
+    assert plan.can_clean is True
+    assert (tmp_path / "runtime-home" / "config.yaml").exists()
+
+
+def test_clean_runtime_home_deletes_valid_home(tmp_path: Path, monkeypatch) -> None:
+    _redirect_store(monkeypatch, tmp_path)
+    store.ensure_local_settings()
+
+    plan = store.clean_runtime_home(dry_run=False)
+
+    assert plan.can_clean is True
+    assert not (tmp_path / "runtime-home").exists()
+
+
+def test_clean_runtime_home_rejects_invalid_marker(tmp_path: Path, monkeypatch) -> None:
+    _redirect_store(monkeypatch, tmp_path)
+    home = tmp_path / "runtime-home"
+    home.mkdir()
+    (home / "home.yaml").write_text("kind: something-else\nversion: 1\n", encoding="utf-8")
+
+    plan = store.runtime_clean_plan()
+
+    assert plan.can_clean is False
+    with pytest.raises(ValueError):
+        store.clean_runtime_home(dry_run=False)
+    assert home.exists()
+
+
+def test_clean_runtime_home_rejects_dangerous_home(tmp_path: Path, monkeypatch) -> None:
+    dangerous = Path(tmp_path.anchor)
+    monkeypatch.setattr(store, "PROJECT_ROOT", dangerous)
+    monkeypatch.setattr(store, "STORE_DIR", dangerous)
+    monkeypatch.setattr(store, "LOCAL_CONFIG_PATH", dangerous / "config.yaml")
+    monkeypatch.setattr(store, "LOCAL_ENV_PATH", dangerous / ".env")
+    monkeypatch.setattr(store, "REPORTS_DIR", dangerous / "reports")
+    monkeypatch.setattr(store, "REPOS_DIR", dangerous / "repos")
+    monkeypatch.setattr(store, "HOME_MARKER_PATH", dangerous / "home.yaml")
+
+    plan = store.runtime_clean_plan()
+
+    assert plan.can_clean is False
+    assert "危险路径" in plan.reason
+
+
+def test_runtime_home_summary_does_not_follow_report_symlinks(tmp_path: Path, monkeypatch) -> None:
+    _redirect_store(monkeypatch, tmp_path)
+    repo = tmp_path / "project" / "demo"
+    external = tmp_path / "external"
+    repo.mkdir(parents=True)
+    external.mkdir()
+    (external / "outside.md").write_text("outside\n", encoding="utf-8")
+
+    store.ensure_local_settings()
+    profile = store.ensure_repo_profile(repo)
+    (profile.reports_dir / "overview.md").write_text("# Report\n", encoding="utf-8")
+    _make_dir_symlink(profile.reports_dir / "linked", external)
+    summary = store.runtime_home_summary()
+
+    assert summary.report_files_count == 1
+
+
+def test_clean_runtime_home_rejects_symlink_home(tmp_path: Path, monkeypatch) -> None:
+    target = tmp_path / "target-home"
+    link = tmp_path / "runtime-home"
+    target.mkdir()
+    store.save_yaml_document(target / "home.yaml", {"kind": "repopilot-home", "version": 1})
+    _make_dir_symlink(link, target)
+    monkeypatch.setattr(store, "PROJECT_ROOT", link)
+    monkeypatch.setattr(store, "STORE_DIR", link)
+    monkeypatch.setattr(store, "LOCAL_CONFIG_PATH", link / "config.yaml")
+    monkeypatch.setattr(store, "LOCAL_ENV_PATH", link / ".env")
+    monkeypatch.setattr(store, "REPORTS_DIR", link / "reports")
+    monkeypatch.setattr(store, "REPOS_DIR", link / "repos")
+    monkeypatch.setattr(store, "HOME_MARKER_PATH", link / "home.yaml")
+
+    plan = store.runtime_clean_plan()
+
+    assert plan.can_clean is False
+    assert "符号链接" in plan.reason
+    with pytest.raises(ValueError):
+        store.clean_runtime_home(dry_run=False)
+    assert link.is_symlink()
+    assert target.exists()
+
+
+def test_runtime_home_summary_ignores_non_directory_repos_and_reports(tmp_path: Path, monkeypatch) -> None:
+    _redirect_store(monkeypatch, tmp_path)
+    store.ensure_local_settings()
+    store.REPOS_DIR.rmdir()
+    store.REPOS_DIR.write_text("not a directory\n", encoding="utf-8")
+    store.REPORTS_DIR.write_text("not a directory\n", encoding="utf-8")
+
+    summary = store.runtime_home_summary()
+
+    assert summary.repo_profiles_count == 0
+    assert summary.report_dirs_count == 0
+    assert summary.report_files_count == 0
+
+
+def test_clean_runtime_home_rejects_symlink_marker(tmp_path: Path, monkeypatch) -> None:
+    _redirect_store(monkeypatch, tmp_path)
+    home = tmp_path / "runtime-home"
+    external = tmp_path / "external"
+    home.mkdir()
+    store.save_yaml_document(external / "home.yaml", {"kind": "repopilot-home", "version": 1})
+    try:
+        (home / "home.yaml").symlink_to(external / "home.yaml")
+    except (NotImplementedError, OSError) as exc:
+        pytest.skip(f"file symlink unavailable: {exc}")
+
+    plan = store.runtime_clean_plan()
+
+    assert plan.can_clean is False
+    with pytest.raises(ValueError):
+        store.clean_runtime_home(dry_run=False)
+    assert home.exists()

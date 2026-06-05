@@ -5,6 +5,7 @@ RepoPilot 的重要变化会记录在这个文件中。
 ## 未发布 / Unreleased
 
 - 将运行时配置、API Key 和报告迁移到统一的 RepoPilot home，并为每个被分析仓库维护独立 profile，避免污染目标仓库。
+- 增加 RepoPilot home 查看与安全清理命令，支持 dry-run、二次确认和 marker 校验。
 - 补充长期维护所需的贡献流程、分支策略、PR 规范和 release/tag 策略。
 - 扩展 GitHub issue 与 pull request 模板，便于后续维护。
 - 为 CI 和发布准备流程增加 Python 包构建冒烟检查。
