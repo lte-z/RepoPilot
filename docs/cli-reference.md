@@ -8,7 +8,7 @@ repopilot
 
 不带子命令时，RepoPilot 会进入引导式 CLI：初始化 `.repopilot/`、检查 LLM 配置、选择仓库路径，然后进入多轮会话。
 
-启动界面包含仓库会话状态、快速动作、输入规则和 `关于 / About` 品牌信息。在线模型返回 token usage 时，每轮结束分隔符会显示本轮总 token；离线模式或服务商未返回 usage 时不会显示。
+启动界面包含仓库会话状态、快速动作、输入规则和 `关于 / About` 品牌信息。在线模型返回 token usage 时，每轮结束分隔符会显示本轮总 token；离线模式、中断、失败或服务商未返回 usage 时会显示 `token 未返回`，RepoPilot 不会本地估算 token。
 
 ## 输入规则
 

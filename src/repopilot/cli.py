@@ -204,6 +204,7 @@ def _turn_divider(
     elapsed_seconds: float | None = None,
     tool_calls: int | None = None,
     token_usage: Any | None = None,
+    show_missing_tokens: bool = False,
 ) -> None:
     parts = [status]
     if elapsed_seconds is not None:
@@ -213,6 +214,8 @@ def _turn_divider(
     token_text = _format_token_usage(token_usage)
     if token_text:
         parts.append(token_text)
+    elif show_missing_tokens:
+        parts.append("token 未返回")
     text = Text(f"─ {' · '.join(parts)} ─", style="dim")
     console.print(Align.center(text))
 
@@ -713,7 +716,7 @@ def _run_chat_action(
     label: str,
     action: Callable[[Callable[[str], None]], object],
     config_path: str | Path | None = None,
-) -> None:
+) -> bool:
     latest = label
     events: list[str] = []
     start = time.perf_counter()
@@ -746,12 +749,17 @@ def _run_chat_action(
     except KeyboardInterrupt:
         status = "已中断"
         _message("已尝试中断当前操作。你可以继续输入命令，或输入 /exit 退出。", "中断 / Interrupted", "yellow")
+    except Exception as exc:
+        status = "失败"
+        _message(_format_exception(exc), TITLE_ERROR, "red")
     finally:
         if latest == label and status == "已完成":
             status = "未执行"
         tool_calls = sum(1 for event in events if event.startswith("调用工具："))
         token_usage = getattr(artifact, "token_usage", None)
-        _turn_divider(status, time.perf_counter() - start, tool_calls, token_usage)
+        show_missing_tokens = status in {"已完成", "已中断", "失败"}
+        _turn_divider(status, time.perf_counter() - start, tool_calls, token_usage, show_missing_tokens)
+    return status == "已完成"
 
 
 def _chat_loop(session: ChatSession) -> None:

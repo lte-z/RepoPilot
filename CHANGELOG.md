@@ -7,6 +7,7 @@ RepoPilot 的重要变化会记录在这个文件中。
 - 补充长期维护所需的贡献流程、分支策略、PR 规范和 release/tag 策略。
 - 扩展 GitHub issue 与 pull request 模板，便于后续维护。
 - 为 CI 和发布准备流程增加 Python 包构建冒烟检查。
+- 统一 CLI 每轮结束状态，在中断、失败或 provider 未返回 usage 时给出明确提示。
 - 清理用户可见文档中的非产品化措辞。
 
 ## v0.1.0 - 2026-06-04
