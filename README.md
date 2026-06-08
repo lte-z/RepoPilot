@@ -46,7 +46,7 @@ RepoPilot 需要 Python 3.12 或更高版本。
 安装稳定发布版：
 
 ```bash
-python -m pip install git+https://github.com/lte-z/RepoPilot.git@v0.1.0
+python -m pip install git+https://github.com/lte-z/RepoPilot.git@v0.1.1
 repopilot
 ```
 
@@ -60,7 +60,7 @@ repopilot
 如果已经安装过，建议加上 `--upgrade` 更新：
 
 ```bash
-python -m pip install --upgrade git+https://github.com/lte-z/RepoPilot.git@v0.1.0
+python -m pip install --upgrade git+https://github.com/lte-z/RepoPilot.git@v0.1.1
 ```
 
 如果终端提示找不到 `repopilot`，通常是 Python 的 `Scripts` 目录不在 PATH。Windows 上可以先查看：
