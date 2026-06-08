@@ -190,6 +190,7 @@ repopilot deep-scan /path/to/repo --json
 ```bash
 repopilot config doctor
 repopilot config show
+repopilot config home
 repopilot config list
 repopilot config get limits.max_tool_rounds
 repopilot config set limits.max_tool_rounds 12
@@ -197,6 +198,7 @@ repopilot config set intent.use_llm_router true
 repopilot config set ui.animations false
 repopilot config set ui.keep_progress_log true
 repopilot config add-root /path/to/repos
+repopilot config clean --dry-run
 repopilot mcp
 repopilot mcp off
 ```
@@ -255,6 +257,8 @@ repopilot config add-root /path/to/repos
 完整配置项见 [docs/configuration.md](docs/configuration.md)。
 
 LLM 供应商、Base URL、模型和 API Key 由 `repopilot` 引导式入口、`/provider`、`/api-key` 或 `repopilot config set-provider` 写入 `REPOPILOT_HOME/.env`。`--config` 只指定 YAML 配置文件；LLM 连接信息仍来自 `REPOPILOT_HOME/.env`，也可以被同名系统环境变量覆盖。
+
+`pip uninstall repopilot` 或删除虚拟环境不会删除 RepoPilot home。停止使用前可以先运行 `repopilot config home` 查看本机保存的数据，再用 `repopilot config clean --dry-run` 预览清理内容，确认后运行 `repopilot config clean`。
 
 ## 开发
 

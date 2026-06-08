@@ -9,6 +9,7 @@ from getpass import getpass
 from pathlib import Path
 from typing import Annotated, Callable, Any
 
+import click
 import typer
 import uvicorn
 from rich import box
@@ -27,12 +28,16 @@ from .permissions import PathGuard, PermissionErrorDetail
 from .session import ChatSession
 from .settings_store import (
     add_readable_root,
+    clean_runtime_home,
     ensure_local_settings,
     flatten_config,
     get_config_value,
     merge_with_defaults,
     remove_readable_root,
     reset_config_value,
+    RuntimeCleanPlan,
+    runtime_clean_plan,
+    runtime_home_summary,
     select_config_document,
     settings_health,
     set_network_enabled,
@@ -434,7 +439,7 @@ def _run(
     except typer.Abort:
         raise
     except Exception as exc:
-        raise typer.ClickException(_format_exception(exc)) from exc
+        raise click.ClickException(_format_exception(exc)) from exc
     if json_output:
         saved = None
         if save:
@@ -540,6 +545,8 @@ def _chat_help_for_group(group: str) -> Table:
             ("/settings reset <key>", "恢复默认值"),
             ("/provider / /api-key", "修改 LLM 连接信息"),
             ("/setup", "初始化运行时配置"),
+            ("repopilot config home", "查看 RepoPilot home 保存的数据"),
+            ("repopilot config clean", "清理 RepoPilot home"),
         ],
         "mcp": [
             ("/mcp", "显示 MCP 工具状态"),
@@ -875,7 +882,7 @@ def _guided_entry() -> None:
     except typer.Abort:
         raise
     except Exception as exc:
-        raise typer.ClickException(_format_exception(exc)) from exc
+        raise click.ClickException(_format_exception(exc)) from exc
 
 
 ConfigOption = Annotated[str | None, typer.Option("--config", help="配置文件路径。")]
@@ -1014,6 +1021,69 @@ def setup(
     _message(f"已初始化本地配置：{config_path}\n已初始化本地环境：{env_path}", TITLE_SETUP, "green")
 
 
+def _runtime_home_table() -> Table:
+    summary = runtime_home_summary()
+    table = _data_table()
+    table.add_column("项目")
+    table.add_column("状态")
+    table.add_row("RepoPilot home", str(summary.home))
+    table.add_row("home 存在", "yes" if summary.exists else "no")
+    table.add_row("home marker", "valid" if summary.marker_valid else ("missing" if not summary.marker_exists else "invalid"))
+    table.add_row("config.yaml", str(summary.config_path) if summary.config_exists else "missing")
+    table.add_row(".env", str(summary.env_path) if summary.env_exists else "missing")
+    table.add_row("repo profiles", str(summary.repo_profiles_count))
+    table.add_row("report directories", str(summary.report_dirs_count))
+    table.add_row("report files", str(summary.report_files_count))
+    table.add_row("total files", str(summary.total_files_count))
+    table.caption = "pip uninstall 或删除虚拟环境不会自动删除 RepoPilot home。"
+    return table
+
+
+def _runtime_clean_table(plan: RuntimeCleanPlan, dry_run: bool) -> Table:
+    table = _data_table()
+    table.add_column("项目")
+    table.add_column("内容")
+    table.add_row("RepoPilot home", str(plan.home))
+    table.add_row("状态", "不存在" if not plan.exists else ("可清理" if plan.can_clean else "拒绝清理"))
+    table.add_row("说明", plan.reason)
+    if plan.entries:
+        table.add_row("将删除", "\n".join(str(item) for item in plan.entries))
+    else:
+        table.add_row("将删除", "无")
+    table.caption = "dry-run：未删除任何文件。" if dry_run else "执行清理会删除配置、API Key、repo profiles 和报告。"
+    return table
+
+
+@config_app.command("home")
+def config_home() -> None:
+    """显示 RepoPilot home 保存的数据摘要。"""
+
+    _print_table(_runtime_home_table(), "运行时目录 / Home", "blue")
+
+
+@config_app.command("clean")
+def config_clean(
+    dry_run: Annotated[bool, typer.Option("--dry-run", help="只预览将删除的内容，不实际删除。")] = False,
+    yes: Annotated[bool, typer.Option("--yes", "-y", help="跳过二次确认。")] = False,
+) -> None:
+    """清理 RepoPilot home 中的配置、API Key、repo profiles 和报告。"""
+
+    plan = runtime_clean_plan()
+    _print_table(_runtime_clean_table(plan, dry_run), "清理 / Clean", "yellow" if plan.can_clean else "red")
+    if dry_run or not plan.exists:
+        return
+    if not plan.can_clean:
+        raise click.ClickException(plan.reason)
+    if not yes and not typer.confirm("确认删除整个 RepoPilot home？", default=False):
+        _message("已取消，RepoPilot home 保持不变。", "清理 / Clean", "yellow")
+        return
+    try:
+        clean_runtime_home(dry_run=False)
+    except (OSError, ValueError) as exc:
+        raise click.ClickException(str(exc)) from exc
+    _message(f"已清理 RepoPilot home：{plan.home}", "清理 / Clean", "green")
+
+
 @config_app.command("show")
 def config_show() -> None:
     """显示当前本地配置摘要。"""
@@ -1037,7 +1107,7 @@ def config_get(key: str, config: ConfigOption = None) -> None:
     try:
         _message(f"{key} = {_value_text(get_config_value(key, config))}", TITLE_CONFIG, "cyan")
     except KeyError as exc:
-        raise typer.ClickException(str(exc)) from exc
+        raise click.ClickException(str(exc)) from exc
 
 
 @config_app.command("set")
@@ -1047,7 +1117,7 @@ def config_set(key: str, value: str, config: ConfigOption = None) -> None:
     try:
         selected = set_config_value(key, value, config)
     except (KeyError, ValueError) as exc:
-        raise typer.ClickException(str(exc)) from exc
+        raise click.ClickException(str(exc)) from exc
     _message(f"已更新 {key}：{selected}", TITLE_CONFIG, "green")
 
 
@@ -1058,7 +1128,7 @@ def config_reset(key: str, config: ConfigOption = None) -> None:
     try:
         selected = reset_config_value(key, config)
     except (KeyError, ValueError) as exc:
-        raise typer.ClickException(str(exc)) from exc
+        raise click.ClickException(str(exc)) from exc
     _message(f"已恢复 {key} 默认值：{selected}", TITLE_CONFIG, "green")
 
 
@@ -1243,7 +1313,7 @@ def mcp(
         set_network_enabled(normalized == "on", config)
         _message(f"HTTP Fetch 已{'开启' if normalized == 'on' else '关闭'}。", "MCP", "green")
     elif normalized != "status":
-        raise typer.ClickException("用法：repopilot mcp [status|on|off]")
+        raise click.ClickException("用法：repopilot mcp [status|on|off]")
     _print_table(_mcp_table(config), "MCP", "blue")
 
 
@@ -1260,7 +1330,7 @@ def chat(
     except typer.Abort:
         raise
     except Exception as exc:
-        raise typer.ClickException(_format_exception(exc)) from exc
+        raise click.ClickException(_format_exception(exc)) from exc
 
 
 @app.command()

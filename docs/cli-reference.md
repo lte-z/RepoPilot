@@ -76,6 +76,8 @@ repopilot web
 ```bash
 repopilot config show
 repopilot config doctor
+repopilot config home
+repopilot config clean [--dry-run] [--yes]
 repopilot config list
 repopilot config schema
 repopilot config get <key>
